@@ -20,16 +20,22 @@ Bitcoin vanity address generator with regex pattern matching and GPU acceleratio
 
 ## Installation
 
-### From source
+### From crates.io
 
 ```bash
-cargo install --path .
+cargo install vgen
 ```
 
 ### Arch Linux (AUR)
 
 ```bash
 yay -S vgen
+```
+
+### From source
+
+```bash
+cargo install --path .
 ```
 
 ## Usage
