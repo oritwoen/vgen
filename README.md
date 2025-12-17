@@ -29,7 +29,7 @@ cargo install vgen
 ### Arch Linux (AUR)
 
 ```bash
-yay -S vgen
+paru -S vgen
 ```
 
 ### From source
