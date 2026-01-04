@@ -1,6 +1,6 @@
 [package]
 name = "vgen"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["oritwoen"]
 description = "Bitcoin vanity address generator with regex pattern matching and GPU acceleration"
