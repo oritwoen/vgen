@@ -20,6 +20,9 @@ bitcoin = { version = "0.32", features = ["rand", "secp-recovery"] }
 sha3 = "0.10"
 hex = "0.4"
 
+# Puzzle data
+boha = "0.11"
+
 # Pattern Matching
 regex = "1.11"
 
