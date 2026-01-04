@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2025-12-28
-**Commit:** ae28285
+**Generated:** 2026-01-04
+**Commit:** 3b754bf
 **Branch:** main
 
 ## OVERVIEW
@@ -41,6 +41,30 @@ vgen/
 | EC point math | `src/shaders/generator.wgsl` | point_add(), point_double(), scalar_mult() |
 | Release new version | `justfile` | `just release X.Y.Z` |
 
+## CODE MAP
+
+### Core Types
+
+| Symbol | Type | Location | Role |
+|--------|------|----------|------|
+| `AddressFormat` | Enum | address.rs:9 | P2pkh, P2wpkh, P2shP2wpkh, P2tr, Ethereum |
+| `AddressGenerator` | Struct | address.rs:52 | Key → address generation |
+| `Pattern` | Struct | pattern.rs:8 | Regex + difficulty estimation |
+| `GpuRunner` | Struct | gpu.rs:45 | wgpu pipeline orchestration |
+| `ScanConfig` | Struct | scanner.rs:15 | Search parameters |
+| `ScanResult` | Struct | scanner.rs:48 | Matches + stats |
+
+### Entry Points
+
+| Function | Location | Role |
+|----------|----------|------|
+| `run_from_args()` | lib.rs:236 | CLI entry |
+| `run()` | lib.rs:245 | Command dispatcher |
+| `run_search()` | lib.rs:451 | Unified GPU/CPU search |
+| `run_tui()` | lib.rs:742 | Interactive TUI |
+| `scan_with_progress()` | scanner.rs:80 | CPU parallel scan |
+| `scan_gpu()` | gpu.rs:636 | GPU batch scan |
+
 ## CONVENTIONS
 
 - **Release profile**: LTO, single codegen-unit, panic=abort, stripped
@@ -48,12 +72,15 @@ vgen/
 - **Batch sizes**: GPU 1M keys, CPU 10K per thread
 - **Entry point**: main.rs is 4-line wrapper, all logic in lib.rs
 - **No custom lints**: Uses default rustfmt/clippy
+- **Tests**: Inline `#[cfg(test)]` modules, no separate tests/ dir
+- **Shaders in src/**: WGSL files under src/shaders/ (non-standard but intentional)
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - **`--tui` flag**: Deprecated, TUI now default in terminals
 - **GPU + Ethereum**: Not supported yet, falls back to CPU silently
 - **Invalid charset in pattern**: Warns but continues (will never match)
+- **Case-insensitive + Bech32**: `-i` flag redundant for bech32 (always lowercase)
 
 ## UNIQUE STYLES
 
