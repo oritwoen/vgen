@@ -3,6 +3,7 @@
 pub mod address;
 pub mod gpu;
 pub mod pattern;
+pub mod provider;
 pub mod scanner;
 
 pub use address::{AddressFormat, AddressGenerator, GeneratedAddress};
@@ -46,8 +47,13 @@ enum Commands {
     /// Generate vanity address matching a pattern
     Generate {
         /// Regex pattern to match (e.g., "^1Cat", "^bc1q.*dead$")
+        /// Or data provider reference (e.g., "boha:b1000:66")
         #[arg(short, long)]
         pattern: String,
+
+        /// When pattern is a data provider, use first N characters of address as prefix
+        #[arg(short = 'l', long)]
+        prefix_length: Option<usize>,
 
         /// Address format: p2pkh (1...) or p2wpkh (bc1q...)
         #[arg(short, long, default_value = "p2pkh")]
@@ -128,8 +134,13 @@ enum Commands {
         puzzle: Option<u32>,
 
         /// Regex pattern to match (optional, matches everything by default if not provided)
+        /// Or data provider reference (e.g., "boha:b1000:66")
         #[arg(short, long)]
         pattern: Option<String>,
+
+        /// When pattern is a data provider, use first N characters of address as prefix
+        #[arg(short = 'l', long)]
+        prefix_length: Option<usize>,
 
         /// Address format: p2pkh (1...) or p2wpkh (bc1q...)
         #[arg(short, long, default_value = "p2pkh")]
@@ -246,6 +257,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Generate {
             pattern,
+            prefix_length,
             format,
             ignore_case,
             threads,
@@ -260,7 +272,11 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             repeat,
             quiet,
         } => {
-            let addr_format: AddressFormat = format.into();
+            let (resolved_pattern, addr_format) = resolve_pattern_and_format(
+                &pattern,
+                prefix_length,
+                format.into(),
+            )?;
 
             if tui {
                 eprintln!("Warning: --tui is deprecated. TUI is now enabled by default in interactive terminals.");
@@ -291,7 +307,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
 
             let repeat = if repeat == 0 { 1 } else { repeat };
 
-            run_search(&pattern, ignore_case, config, use_gpu, use_tui, quiet, output, file, repeat)
+            run_search(&resolved_pattern, ignore_case, config, use_gpu, use_tui, quiet, output, file, repeat)
         }
 
         Commands::Estimate {
@@ -392,6 +408,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             range,
             puzzle,
             pattern,
+            prefix_length,
             format,
             threads,
             no_gpu,
@@ -402,27 +419,11 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             output,
             file,
         } => {
-            let (start_key, end_key) = if let Some(p) = puzzle {
-                if p < 1 || p > 160 {
-                    anyhow::bail!("Puzzle number must be between 1 and 160");
-                }
-                let start = BigUint::one() << (p - 1);
-                let end = (BigUint::one() << p) - 1u32;
-                (start, end)
-            } else if let Some(r) = range {
-                let parts: Vec<&str> = r.split(':').collect();
-                if parts.len() != 2 {
-                    anyhow::bail!("Range must be in format START:END");
-                }
-                let start = BigUint::from_str_radix(parts[0], 16).context("Invalid start hex")?;
-                let end = BigUint::from_str_radix(parts[1], 16).context("Invalid end hex")?;
-                (start, end)
-            } else {
-                anyhow::bail!("Either --range or --puzzle must be specified");
-            };
+            let pattern_str = pattern.unwrap_or_else(|| ".".to_string());
 
-            let pattern_str = pattern.unwrap_or_else(|| ".".to_string()); // Match all if not specified
-            let addr_format: AddressFormat = format.into();
+            let (start_key, end_key, resolved_pattern, addr_format) =
+                resolve_range_params(&pattern_str, prefix_length, format.into(), range, puzzle)?;
+
             let count = if count == 0 { usize::MAX } else { count };
             let repeat = if repeat == 0 { 1 } else { repeat };
 
@@ -443,8 +444,110 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 end: Some(end_key),
             };
 
-            run_search(&pattern_str, false, config, use_gpu, use_tui, false, output, file, repeat)
+            run_search(&resolved_pattern, false, config, use_gpu, use_tui, false, output, file, repeat)
         }
+    }
+}
+
+fn resolve_pattern_and_format(
+    pattern: &str,
+    prefix_length: Option<usize>,
+    default_format: AddressFormat,
+) -> Result<(String, AddressFormat)> {
+    if let Some(provider_result) = provider::resolve(pattern)? {
+        let prefix_len = prefix_length.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Provider pattern '{}' requires --prefix-length (-l) to specify how many \
+                 characters of address '{}' to match",
+                pattern,
+                provider_result.address
+            )
+        })?;
+
+        let resolved = provider::build_pattern(&provider_result, prefix_len);
+
+        eprintln!(
+            "Provider: {} → {} → pattern '{}'",
+            pattern, provider_result.address, resolved
+        );
+
+        Ok((resolved, provider_result.format))
+    } else {
+        if prefix_length.is_some() {
+            eprintln!("Warning: --prefix-length is ignored for regex patterns");
+        }
+        Ok((pattern.to_string(), default_format))
+    }
+}
+
+fn resolve_range_params(
+    pattern: &str,
+    prefix_length: Option<usize>,
+    default_format: AddressFormat,
+    range: Option<String>,
+    puzzle: Option<u32>,
+) -> Result<(BigUint, BigUint, String, AddressFormat)> {
+    if let Some(provider_result) = provider::resolve(pattern)? {
+        let resolved_pattern = if let Some(len) = prefix_length {
+            let pat = provider::build_pattern(&provider_result, len);
+            eprintln!(
+                "Provider: {} → {} → pattern '{}'",
+                pattern, provider_result.address, pat
+            );
+            pat
+        } else {
+            let pat = provider::build_exact_pattern(&provider_result);
+            eprintln!(
+                "Provider: {} → {} → exact match",
+                pattern, provider_result.address
+            );
+            pat
+        };
+
+        let (start, end) = if range.is_some() || puzzle.is_some() {
+            parse_explicit_range(range, puzzle)?
+        } else {
+            provider_result.key_range.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Provider '{}' has no key range. Use --range or --puzzle to specify range.",
+                    pattern
+                )
+            })?
+        };
+
+        Ok((start, end, resolved_pattern, provider_result.format))
+    } else {
+        let (start, end) = parse_explicit_range(range, puzzle)?;
+        let resolved_pattern = if pattern == "." {
+            ".".to_string()
+        } else {
+            pattern.to_string()
+        };
+        Ok((start, end, resolved_pattern, default_format))
+    }
+}
+
+fn parse_explicit_range(
+    range: Option<String>,
+    puzzle: Option<u32>,
+) -> Result<(BigUint, BigUint)> {
+    if let Some(p) = puzzle {
+        if p < 1 || p > 160 {
+            anyhow::bail!("Puzzle number must be between 1 and 160");
+        }
+        let start = BigUint::one() << (p - 1);
+        let end = (BigUint::one() << p) - 1u32;
+        Ok((start, end))
+    } else if let Some(r) = range {
+        let parts: Vec<&str> = r.split(':').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("Range must be in format START:END");
+        }
+        let start = BigUint::from_str_radix(parts[0], 16).context("Invalid start hex")?;
+        let end = BigUint::from_str_radix(parts[1], 16).context("Invalid end hex")?;
+        Ok((start, end))
+    } else {
+        anyhow::bail!("Either --range, --puzzle, or a provider pattern with key range must be specified")
     }
 }
 
