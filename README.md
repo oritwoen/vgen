@@ -18,6 +18,7 @@ Bitcoin vanity address generator with regex pattern matching and GPU acceleratio
 - Parallel CPU scanning with rayon
 - Interactive TUI with real-time statistics
 - Range scanning for Bitcoin Puzzle challenges
+- Data providers for puzzle/bounty integration (boha)
 - JSON and minimal output formats
 
 ## Installation
@@ -79,6 +80,27 @@ vgen range --puzzle 66 -p "."
 # Custom range
 vgen range -r "20000000000000000:3FFFFFFFFFFFFFFFF"
 ```
+
+### Data providers
+
+Use external data sources for pattern generation:
+
+```bash
+# Vanity with puzzle address prefix (6 characters)
+vgen generate -p "boha:b1000:66" -l 6
+# → Resolves to pattern: ^13zb1h
+
+# Puzzle solving (exact address match + auto key range)
+vgen range -p "boha:b1000:66"
+# → Range: 2^65..2^66-1
+# → Pattern: ^13zb1hQbWVsc2S7ZTZnP2G4undNNpdh5so$
+
+# With prefix matching in range mode
+vgen range -p "boha:b1000:66" -l 8
+```
+
+Supported providers:
+- `boha:collection:id` - [boha](https://github.com/oritwoen/boha) puzzle library (b1000, gsmg, bitaps, etc.)
 
 ### Verify private key
 
@@ -169,6 +191,7 @@ Patterns use Rust regex syntax:
 
 - [ ] More cryptocurrencies (Litecoin, Dogecoin, Solana, etc.)
 - [ ] GPU performance improvements (CUDA backend, shader optimizations)
+- [ ] More data providers (mempool, blockchair, etc.)
 
 ## Security
 
