@@ -1,5 +1,8 @@
 # vgen
 
+[![Crates.io](https://img.shields.io/crates/v/vgen?style=flat&colorA=130f40&colorB=474787)](https://crates.io/crates/vgen)
+[![Downloads](https://img.shields.io/crates/d/vgen?style=flat&colorA=130f40&colorB=474787)](https://crates.io/crates/vgen)
+[![License](https://img.shields.io/crates/l/vgen?style=flat&colorA=130f40&colorB=474787)](LICENSE)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/oritwoen/vgen)
 
 Bitcoin vanity address generator with regex pattern matching and GPU acceleration.
