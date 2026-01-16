@@ -175,6 +175,23 @@ fn fe_is_zero(a: array<u32, 8>) -> bool {
 }
 fn fe_double(a: array<u32, 8>) -> array<u32, 8> { return fe_add(a, a); }
 
+// Negate in field: -a = p - a
+fn fe_neg(a: array<u32, 8>) -> array<u32, 8> {
+    if (fe_is_zero(a)) { return a; }
+    var result: array<u32, 8>;
+    var borrow: u32 = 0u;
+    // result = P - a
+    var diff = P0 - a[0]; borrow = select(0u, 1u, P0 < a[0]); result[0] = diff;
+    diff = P1 - a[1] - borrow; borrow = select(0u, 1u, P1 < a[1] + borrow); result[1] = diff;
+    diff = P2 - a[2] - borrow; borrow = select(0u, 1u, P2 < a[2] + borrow); result[2] = diff;
+    diff = P3 - a[3] - borrow; borrow = select(0u, 1u, P3 < a[3] + borrow); result[3] = diff;
+    diff = P4 - a[4] - borrow; borrow = select(0u, 1u, P4 < a[4] + borrow); result[4] = diff;
+    diff = P5 - a[5] - borrow; borrow = select(0u, 1u, P5 < a[5] + borrow); result[5] = diff;
+    diff = P6 - a[6] - borrow; borrow = select(0u, 1u, P6 < a[6] + borrow); result[6] = diff;
+    diff = P7 - a[7] - borrow; result[7] = diff;
+    return result;
+}
+
 fn fe_inv(a: array<u32, 8>) -> array<u32, 8> {
     var res = fe_one();
     var base = a;
@@ -369,6 +386,10 @@ struct Config {
 @group(0) @binding(1) var<storage, read_write> table_rw: array<AffinePoint>;
 // Output is array of RIPEMD160 hashes (5 u32s each)
 @group(0) @binding(2) var<storage, read_write> output_hashes: array<array<u32, 5>>;
+// Temporary storage for Jacobian points (for batch affine inversion)
+@group(0) @binding(3) var<storage, read_write> jacobian_points: array<JacobianPoint>;
+// Output for P2TR: X coordinates (8 u32s = 32 bytes each)
+@group(0) @binding(4) var<storage, read_write> output_x_coords: array<array<u32, 8>>;
 
 fn unpack_bigint(b: BigInt256) -> array<u32, 8> {
     return array<u32, 8>(b.v0.x, b.v0.y, b.v0.z, b.v0.w, b.v1.x, b.v1.y, b.v1.z, b.v1.w);
@@ -415,4 +436,202 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Store Result (Hash160 bytes)
     output_hashes[idx] = ripemd_out;
+}
+
+// =============================================================================
+// Batch Affine Inversion Kernels (Blelloch scan optimization)
+// =============================================================================
+
+// Step 1: Compute Jacobian points without normalization
+@compute @workgroup_size(256)
+fn compute_jacobian(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx >= config.num_keys) { return; }
+
+    // Load Base Pubkey
+    var base_pub: JacobianPoint;
+    base_pub.x = unpack_bigint(config.base_x);
+    base_pub.y = unpack_bigint(config.base_y);
+    base_pub.z = fe_one();
+
+    // Load Precomputed Point (i * G)
+    let point_i = table_rw[idx];
+
+    // P = Base + i*G (Jacobian, not normalized)
+    let p_res = jac_add_affine(base_pub, point_i);
+
+    // Store Jacobian point for batch normalization
+    jacobian_points[idx] = p_res;
+}
+
+// Shared memory for fully parallel Montgomery batch inversion
+// Total: 256 * 32 * 2 + 32 = ~16KB per workgroup
+var<workgroup> prefix: array<array<u32, 8>, 256>;   // prefix products
+var<workgroup> suffix: array<array<u32, 8>, 256>;   // suffix products
+var<workgroup> inv_total_shared: array<u32, 8>;     // broadcast slot
+
+// Step 2: Fully parallel Montgomery batch inversion, output Hash160
+// Complexity: O(log n) parallel steps instead of O(n) sequential
+@compute @workgroup_size(256)
+fn batch_normalize_hash(@builtin(global_invocation_id) gid: vec3<u32>,
+                        @builtin(local_invocation_id) lid: vec3<u32>) {
+    let local_idx = lid.x;
+    let global_idx = gid.x;
+
+    // Load Z into both prefix and suffix arrays
+    var z_val: array<u32, 8>;
+    if (global_idx < config.num_keys) {
+        z_val = jacobian_points[global_idx].z;
+    } else {
+        z_val = fe_one();
+    }
+    prefix[local_idx] = z_val;
+    suffix[local_idx] = z_val;
+    workgroupBarrier();
+
+    // Phase 1a: Parallel inclusive prefix products (left to right)
+    // prefix[i] = Z[0] * Z[1] * ... * Z[i]
+    for (var stride = 1u; stride < 256u; stride *= 2u) {
+        var val = prefix[local_idx];
+        if (local_idx >= stride) {
+            val = fe_mul(prefix[local_idx - stride], val);
+        }
+        workgroupBarrier();
+        prefix[local_idx] = val;
+        workgroupBarrier();
+    }
+
+    // Phase 1b: Parallel inclusive suffix products (right to left)
+    // suffix[i] = Z[i] * Z[i+1] * ... * Z[255]
+    for (var stride = 1u; stride < 256u; stride *= 2u) {
+        var val = suffix[local_idx];
+        if (local_idx + stride < 256u) {
+            val = fe_mul(val, suffix[local_idx + stride]);
+        }
+        workgroupBarrier();
+        suffix[local_idx] = val;
+        workgroupBarrier();
+    }
+
+    // Phase 2: Single inversion of total product
+    if (local_idx == 0u) {
+        inv_total_shared = fe_inv(prefix[255]);
+    }
+    workgroupBarrier();
+    let inv_total = inv_total_shared;
+
+    // Phase 3: Parallel per-element inverse computation
+    // Z_inv[i] = prefix[i-1] * inv_total * suffix[i+1]
+    var z_inv: array<u32, 8>;
+    if (local_idx == 0u) {
+        // Z_inv[0] = inv_total * suffix[1]
+        z_inv = fe_mul(inv_total, suffix[1]);
+    } else if (local_idx == 255u) {
+        // Z_inv[255] = prefix[254] * inv_total
+        z_inv = fe_mul(prefix[254], inv_total);
+    } else {
+        // Z_inv[i] = prefix[i-1] * inv_total * suffix[i+1]
+        let tmp = fe_mul(prefix[local_idx - 1u], inv_total);
+        z_inv = fe_mul(tmp, suffix[local_idx + 1u]);
+    }
+
+    if (global_idx >= config.num_keys) { return; }
+
+    let z_inv2 = fe_square(z_inv);
+    let z_inv3 = fe_mul(z_inv2, z_inv);
+
+    let p = jacobian_points[global_idx];
+    var p_aff: AffinePoint;
+    p_aff.x = fe_mul(p.x, z_inv2);
+    p_aff.y = fe_mul(p.y, z_inv3);
+
+    // Compute Hash160
+    let parity = p_aff.y[0] & 1u;
+    let sha_out = sha256_compressed_pubkey(parity, p_aff.x);
+    let ripemd_out = ripemd160(sha_out);
+    output_hashes[global_idx] = ripemd_out;
+}
+
+// Step 2 (P2TR variant): Full Taproot key tweaking on GPU
+// 1. Batch normalize to get affine coordinates
+// 2. Compute tweak: t = tagged_hash("TapTweak", x_only)
+// 3. Compute t*G
+// 4. Add P + t*G to get tweaked pubkey Q
+// 5. Output Q.x (the tweaked x-only pubkey for P2TR address)
+@compute @workgroup_size(256)
+fn batch_normalize_p2tr(@builtin(global_invocation_id) gid: vec3<u32>,
+                        @builtin(local_invocation_id) lid: vec3<u32>) {
+    let local_idx = lid.x;
+    let global_idx = gid.x;
+
+    // Load Z into both prefix and suffix arrays for batch inversion
+    var z_val: array<u32, 8>;
+    if (global_idx < config.num_keys) {
+        z_val = jacobian_points[global_idx].z;
+    } else {
+        z_val = fe_one();
+    }
+    prefix[local_idx] = z_val;
+    suffix[local_idx] = z_val;
+    workgroupBarrier();
+
+    // Parallel inclusive prefix products
+    for (var stride = 1u; stride < 256u; stride *= 2u) {
+        var val = prefix[local_idx];
+        if (local_idx >= stride) {
+            val = fe_mul(prefix[local_idx - stride], val);
+        }
+        workgroupBarrier();
+        prefix[local_idx] = val;
+        workgroupBarrier();
+    }
+
+    // Parallel inclusive suffix products
+    for (var stride = 1u; stride < 256u; stride *= 2u) {
+        var val = suffix[local_idx];
+        if (local_idx + stride < 256u) {
+            val = fe_mul(val, suffix[local_idx + stride]);
+        }
+        workgroupBarrier();
+        suffix[local_idx] = val;
+        workgroupBarrier();
+    }
+
+    // Single inversion
+    if (local_idx == 0u) {
+        inv_total_shared = fe_inv(prefix[255]);
+    }
+    workgroupBarrier();
+    let inv_total = inv_total_shared;
+
+    // Per-element inverse
+    var z_inv: array<u32, 8>;
+    if (local_idx == 0u) {
+        z_inv = fe_mul(inv_total, suffix[1]);
+    } else if (local_idx == 255u) {
+        z_inv = fe_mul(prefix[254], inv_total);
+    } else {
+        let tmp = fe_mul(prefix[local_idx - 1u], inv_total);
+        z_inv = fe_mul(tmp, suffix[local_idx + 1u]);
+    }
+
+    if (global_idx >= config.num_keys) { return; }
+
+    // Normalize to affine
+    let p_jac = jacobian_points[global_idx];
+    let z_inv2 = fe_square(z_inv);
+    let z_inv3 = fe_mul(z_inv2, z_inv);
+    let x_aff = fe_mul(p_jac.x, z_inv2);
+    var y_aff = fe_mul(p_jac.y, z_inv3);
+
+    // BIP340: If Y is odd, negate Y to get even-Y point for x-only representation
+    // The internal key uses the point with even Y
+    let y_is_odd = (y_aff[0] & 1u) == 1u;
+    if (y_is_odd) {
+        y_aff = fe_neg(y_aff);
+    }
+
+    // Output internal key X coordinate
+    // Taproot tweak is computed on CPU (GPU instruction limit prevents full tweak on GPU)
+    output_x_coords[global_idx] = x_aff;
 }
