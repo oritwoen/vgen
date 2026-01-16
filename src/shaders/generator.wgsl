@@ -514,8 +514,15 @@ fn batch_normalize_hash(@builtin(global_invocation_id) gid: vec3<u32>,
     }
 
     // Phase 2: Single inversion of total product
+    // Guard against Z=0 (point at infinity) which would make prefix[255]=0
+    // This is astronomically rare (requires Base = -i*G for some i in batch)
     if (local_idx == 0u) {
-        inv_total_shared = fe_inv(prefix[255]);
+        let total = prefix[255];
+        if (fe_is_zero(total)) {
+            inv_total_shared = fe_one(); // Fallback: affected points will have invalid coords
+        } else {
+            inv_total_shared = fe_inv(total);
+        }
     }
     workgroupBarrier();
     let inv_total = inv_total_shared;
@@ -597,9 +604,14 @@ fn batch_normalize_p2tr(@builtin(global_invocation_id) gid: vec3<u32>,
         workgroupBarrier();
     }
 
-    // Single inversion
+    // Single inversion (guard against Z=0 point at infinity)
     if (local_idx == 0u) {
-        inv_total_shared = fe_inv(prefix[255]);
+        let total = prefix[255];
+        if (fe_is_zero(total)) {
+            inv_total_shared = fe_one();
+        } else {
+            inv_total_shared = fe_inv(total);
+        }
     }
     workgroupBarrier();
     let inv_total = inv_total_shared;
