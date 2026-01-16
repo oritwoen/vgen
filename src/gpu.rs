@@ -1102,21 +1102,22 @@ pub async fn scan_gpu_p2tr_with_runner(
             }
         }
 
+        // Create secp256k1 context once outside the parallel iterator
+        use bitcoin::secp256k1::{Secp256k1, XOnlyPublicKey};
+        let secp = Secp256k1::verification_only();
+
         let found_in_batch = x_coords
             .par_iter()
             .enumerate()
             .filter_map(|(i, x_raw)| {
-                // Convert GPU limbs to BE bytes - this is already the TWEAKED x-only pubkey
+                // Convert GPU limbs to BE bytes - this is the internal x-only pubkey
                 let x_bytes = limbs_to_bytes_be(x_raw);
 
                 // Get the private key for this index
                 let k = increment_key(batch_start_key, i as u64)?;
 
                 // GPU returns internal X, CPU applies Taproot tweak
-                use bitcoin::secp256k1::{Secp256k1, XOnlyPublicKey};
-
                 let internal_key = XOnlyPublicKey::from_slice(&x_bytes).ok()?;
-                let secp = Secp256k1::verification_only();
                 let addr = bitcoin::Address::p2tr(&secp, internal_key, None, bitcoin::Network::Bitcoin);
                 let addr_string = addr.to_string();
 

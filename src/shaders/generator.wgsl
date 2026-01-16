@@ -180,14 +180,14 @@ fn fe_neg(a: array<u32, 8>) -> array<u32, 8> {
     if (fe_is_zero(a)) { return a; }
     var result: array<u32, 8>;
     var borrow: u32 = 0u;
-    // result = P - a
+    // result = P - a (using safe borrow check to avoid overflow)
     var diff = P0 - a[0]; borrow = select(0u, 1u, P0 < a[0]); result[0] = diff;
-    diff = P1 - a[1] - borrow; borrow = select(0u, 1u, P1 < a[1] + borrow); result[1] = diff;
-    diff = P2 - a[2] - borrow; borrow = select(0u, 1u, P2 < a[2] + borrow); result[2] = diff;
-    diff = P3 - a[3] - borrow; borrow = select(0u, 1u, P3 < a[3] + borrow); result[3] = diff;
-    diff = P4 - a[4] - borrow; borrow = select(0u, 1u, P4 < a[4] + borrow); result[4] = diff;
-    diff = P5 - a[5] - borrow; borrow = select(0u, 1u, P5 < a[5] + borrow); result[5] = diff;
-    diff = P6 - a[6] - borrow; borrow = select(0u, 1u, P6 < a[6] + borrow); result[6] = diff;
+    diff = P1 - a[1] - borrow; borrow = select(0u, 1u, P1 < a[1] || (borrow == 1u && a[1] == P1)); result[1] = diff;
+    diff = P2 - a[2] - borrow; borrow = select(0u, 1u, P2 < a[2] || (borrow == 1u && a[2] == P2)); result[2] = diff;
+    diff = P3 - a[3] - borrow; borrow = select(0u, 1u, P3 < a[3] || (borrow == 1u && a[3] == P3)); result[3] = diff;
+    diff = P4 - a[4] - borrow; borrow = select(0u, 1u, P4 < a[4] || (borrow == 1u && a[4] == P4)); result[4] = diff;
+    diff = P5 - a[5] - borrow; borrow = select(0u, 1u, P5 < a[5] || (borrow == 1u && a[5] == P5)); result[5] = diff;
+    diff = P6 - a[6] - borrow; borrow = select(0u, 1u, P6 < a[6] || (borrow == 1u && a[6] == P6)); result[6] = diff;
     diff = P7 - a[7] - borrow; result[7] = diff;
     return result;
 }
