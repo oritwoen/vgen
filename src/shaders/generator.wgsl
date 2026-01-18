@@ -182,7 +182,7 @@ fn fe_neg(a: array<u32, 8>) -> array<u32, 8> {
     var borrow: u32 = 0u;
     // result = P - a (using safe borrow check to avoid overflow)
     var diff = P0 - a[0]; borrow = select(0u, 1u, P0 < a[0]); result[0] = diff;
-    diff = P1 - a[1] - borrow; borrow = select(0u, 1u, P1 < a[1] || (borrow == 1u && a[1] == 0xFFFFFFFFu)); result[1] = diff;
+    diff = P1 - a[1] - borrow; borrow = select(0u, 1u, P1 < a[1] || (borrow == 1u && a[1] == P1)); result[1] = diff;
     diff = P2 - a[2] - borrow; borrow = select(0u, 1u, P2 < a[2] || (borrow == 1u && a[2] == 0xFFFFFFFFu)); result[2] = diff;
     diff = P3 - a[3] - borrow; borrow = select(0u, 1u, P3 < a[3] || (borrow == 1u && a[3] == 0xFFFFFFFFu)); result[3] = diff;
     diff = P4 - a[4] - borrow; borrow = select(0u, 1u, P4 < a[4] || (borrow == 1u && a[4] == 0xFFFFFFFFu)); result[4] = diff;
