@@ -7,7 +7,7 @@ pub mod provider;
 pub mod scanner;
 
 pub use address::{AddressFormat, AddressGenerator, GeneratedAddress};
-pub use gpu::{scan_gpu_with_runner, GpuRunner};
+pub use gpu::{scan_gpu_p2tr_with_runner, scan_gpu_with_runner, GpuRunner};
 pub use pattern::Pattern;
 pub use scanner::{benchmark, scan, scan_with_progress, ProgressCallback, ScanConfig, ScanResult};
 
@@ -195,6 +195,7 @@ enum Commands {
 enum Format {
     P2pkh,
     P2wpkh,
+    P2tr,
     Ethereum,
 }
 
@@ -203,6 +204,7 @@ impl From<Format> for AddressFormat {
         match f {
             Format::P2pkh => AddressFormat::P2pkh,
             Format::P2wpkh => AddressFormat::P2wpkh,
+            Format::P2tr => AddressFormat::P2tr,
             Format::Ethereum => AddressFormat::Ethereum,
         }
     }
@@ -332,6 +334,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 match format {
                     Format::P2pkh => "P2PKH (1...)",
                     Format::P2wpkh => "P2WPKH (bc1q...)",
+                    Format::P2tr => "P2TR (bc1p...)",
                     Format::Ethereum => "Ethereum (0x...)",
                 }
             );
@@ -677,13 +680,23 @@ fn run_search(
 
         let result = if let Some(runner) = &gpu_runner {
             let rt_ref = rt.as_mut().expect("runtime should exist");
-            rt_ref.block_on(scan_gpu_with_runner(
+            if config.format == AddressFormat::P2tr {
+                rt_ref.block_on(scan_gpu_p2tr_with_runner(
                     &pat,
                     &config,
                     progress_cb.clone(),
                     Some(stop.clone()),
                     runner.clone(),
                 ))?
+            } else {
+                rt_ref.block_on(scan_gpu_with_runner(
+                    &pat,
+                    &config,
+                    progress_cb.clone(),
+                    Some(stop.clone()),
+                    runner.clone(),
+                ))?
+            }
         } else {
             scan_with_progress(&pat, &config, progress_cb.clone(), Some(stop.clone()))
         };
@@ -911,7 +924,12 @@ fn run_tui(
             let rt_thread = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            match rt_thread.block_on(scan_gpu_with_runner(&pat, &config_clone, Some(progress_cb.clone()), Some(stop_clone.clone()), runner)) {
+            let gpu_result = if config_clone.format == AddressFormat::P2tr {
+                rt_thread.block_on(scan_gpu_p2tr_with_runner(&pat, &config_clone, Some(progress_cb.clone()), Some(stop_clone.clone()), runner))
+            } else {
+                rt_thread.block_on(scan_gpu_with_runner(&pat, &config_clone, Some(progress_cb.clone()), Some(stop_clone.clone()), runner))
+            };
+            match gpu_result {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("GPU path failed in TUI thread ({e:?}); falling back to CPU.");
