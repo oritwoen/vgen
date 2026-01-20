@@ -126,44 +126,94 @@ pub struct GpuRunner {
     frames: Vec<Frame>,
     pub batch_size: u32,
     pub device_name: String,
+    backend: GpuBackend,
 }
 
 impl GpuRunner {
-    pub async fn new(batch_size: u32) -> Result<Self> {
-        eprintln!("Requesting GPU instance (prefer Vulkan)...");
-        let mut instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            ..Default::default()
-        });
+    pub fn backend(&self) -> GpuBackend {
+        self.backend
+    }
 
-        eprintln!("Requesting adapter...");
-        let mut adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await;
-
-        if adapter.is_none() {
-            eprintln!("Vulkan adapter not found; falling back to GL backend.");
-            instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::GL,
-                ..Default::default()
-            });
-            adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: None,
-                    force_fallback_adapter: false,
-                })
-                .await;
+    pub async fn new(batch_size: u32, backend: GpuBackend) -> Result<Self> {
+        fn device_type_priority(device_type: wgpu::DeviceType) -> u8 {
+            match device_type {
+                wgpu::DeviceType::DiscreteGpu => 0,
+                wgpu::DeviceType::VirtualGpu => 1,
+                wgpu::DeviceType::IntegratedGpu => 2,
+                wgpu::DeviceType::Cpu => 3,
+                _ => 4,
+            }
         }
 
-        let adapter = adapter.context("Failed to find suitable GPU adapter")?;
+        let (_instance, adapter, selected_backend) = match backend {
+            GpuBackend::Auto => {
+                let mut selected: Option<(wgpu::Instance, wgpu::Adapter, GpuBackend)> = None;
+
+                for &candidate in GpuBackend::fallback_order() {
+                    let backends = candidate.to_wgpu_backends();
+                    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                        backends,
+                        ..Default::default()
+                    });
+
+                    let mut adapters = instance.enumerate_adapters(backends);
+                    adapters.retain(|a| !is_software_adapter(&a.get_info()));
+                    adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
+
+                    if let Some(adapter) = adapters.into_iter().next() {
+                        selected = Some((instance, adapter, candidate));
+                        break;
+                    }
+                }
+
+                if selected.is_none() {
+                    for &candidate in GpuBackend::fallback_order() {
+                        let backends = candidate.to_wgpu_backends();
+                        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                            backends,
+                            ..Default::default()
+                        });
+
+                        let mut adapters = instance.enumerate_adapters(backends);
+                        adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
+
+                        if let Some(adapter) = adapters.into_iter().next() {
+                            selected = Some((instance, adapter, candidate));
+                            break;
+                        }
+                    }
+                }
+
+                selected.context("No GPU backends available")?
+            }
+            _ => {
+                let backends = backend.to_wgpu_backends();
+                let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                    backends,
+                    ..Default::default()
+                });
+
+                let mut adapters = instance.enumerate_adapters(backends);
+                if adapters.is_empty() {
+                    anyhow::bail!("Backend {} not available on this system", backend.name());
+                }
+
+                adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
+                let adapter = adapters
+                    .into_iter()
+                    .next()
+                    .context("Failed to select GPU adapter")?;
+
+                (instance, adapter, backend)
+            }
+        };
+
         let adapter_info = adapter.get_info();
-        eprintln!("Found adapter: {:?}", adapter_info);
-        let device_name = adapter_info.name;
+        eprintln!(
+            "Using GPU backend {} with adapter: {:?}",
+            selected_backend, adapter_info
+        );
+        let device_name = adapter_info.name.clone();
 
         let (device, queue) = adapter
             .request_device(
@@ -449,6 +499,7 @@ impl GpuRunner {
             frames,
             batch_size,
             device_name,
+            backend: selected_backend,
         })
     }
 
