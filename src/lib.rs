@@ -7,7 +7,7 @@ pub mod provider;
 pub mod scanner;
 
 pub use address::{AddressFormat, AddressGenerator, GeneratedAddress};
-pub use gpu::{scan_gpu_p2tr_with_runner, scan_gpu_with_runner, GpuRunner};
+pub use gpu::{scan_gpu_p2tr_with_runner, scan_gpu_with_runner, GpuBackend, GpuRunner};
 pub use pattern::Pattern;
 pub use scanner::{benchmark, scan, scan_with_progress, ProgressCallback, ScanConfig, ScanResult};
 
@@ -73,6 +73,10 @@ enum Commands {
         /// GPU batch size (default: 1,048,576)
         #[arg(long, default_value = "1048576")]
         gpu_batch_size: u32,
+
+        /// GPU backend selection
+        #[arg(long, default_value = "auto")]
+        backend: GpuBackend,
 
         /// CPU batch size per thread (default: 10,000)
         #[arg(long, default_value = "10000")]
@@ -157,6 +161,10 @@ enum Commands {
         #[arg(long, default_value = "1048576")]
         gpu_batch_size: u32,
 
+        /// GPU backend selection
+        #[arg(long, default_value = "auto")]
+        backend: GpuBackend,
+
         /// Stop after finding N matches (0 = scan entire range)
         #[arg(short, long, default_value_t = 1)]
         count: usize,
@@ -187,6 +195,13 @@ enum Commands {
         /// Expected address (optional)
         #[arg(short, long)]
         address: Option<String>,
+    },
+
+    /// List available GPU adapters
+    ListGpus {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -264,6 +279,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             threads,
             no_gpu,
             gpu_batch_size,
+            backend,
             cpu_batch_size,
             tui,
             no_tui,
@@ -310,6 +326,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 ignore_case,
                 config,
                 use_gpu,
+                backend,
                 use_tui,
                 quiet,
                 output,
@@ -410,6 +427,13 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
+        Commands::ListGpus { json } => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(list_gpus(json))
+        }
+
         Commands::Range {
             range,
             puzzle,
@@ -419,6 +443,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             threads,
             no_gpu,
             gpu_batch_size,
+            backend,
             count,
             repeat,
             no_tui,
@@ -455,6 +480,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 false,
                 config,
                 use_gpu,
+                backend,
                 use_tui,
                 false,
                 output,
@@ -572,6 +598,7 @@ fn run_search(
     ignore_case: bool,
     config: ScanConfig,
     gpu: bool,
+    backend: GpuBackend,
     use_tui: bool,
     quiet: bool,
     output: OutputFormat,
@@ -622,7 +649,10 @@ fn run_search(
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        match rt.block_on(GpuRunner::new(config.gpu_batch_size.unwrap_or(1048576))) {
+        match rt.block_on(GpuRunner::new(
+            config.gpu_batch_size.unwrap_or(1048576),
+            backend,
+        )) {
             Ok(runner) => {
                 gpu_runner = Some(Arc::new(runner));
                 if use_tui {
@@ -843,6 +873,65 @@ fn run_search(
             format_with_commas(result.operations),
             format_duration(result.elapsed_secs)
         );
+    }
+
+    Ok(())
+}
+
+async fn list_gpus(json: bool) -> Result<()> {
+    #[derive(Serialize)]
+    struct AdapterOut {
+        name: String,
+        backend: String,
+        device_type: String,
+        software: bool,
+    }
+
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+
+    let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+    let adapters: Vec<_> = adapters.into_iter().collect();
+
+    let out: Vec<AdapterOut> = adapters
+        .iter()
+        .map(|adapter| {
+            let info = adapter.get_info();
+            let software = gpu::is_software_adapter(&info);
+            AdapterOut {
+                name: info.name,
+                backend: format!("{:?}", info.backend),
+                device_type: format!("{:?}", info.device_type),
+                software,
+            }
+        })
+        .collect();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    println!("Available GPUs:");
+    if out.is_empty() {
+        println!("  (none)");
+        return Ok(());
+    }
+
+    for (i, a) in out.iter().enumerate() {
+        let mut line = format!(
+            "  {}. {} ({}) - {}",
+            i + 1,
+            a.name,
+            a.backend,
+            a.device_type
+        );
+        if a.software {
+            line.push_str(" [software]");
+        }
+        println!("{}", line);
     }
 
     Ok(())

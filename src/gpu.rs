@@ -63,7 +63,7 @@ impl std::fmt::Display for GpuBackend {
 }
 
 #[allow(dead_code)]
-fn is_software_adapter(info: &wgpu::AdapterInfo) -> bool {
+pub(crate) fn is_software_adapter(info: &wgpu::AdapterInfo) -> bool {
     if info.device_type == wgpu::DeviceType::Cpu {
         return true;
     }
@@ -1075,7 +1075,7 @@ pub fn scan_gpu(
         .build()?;
 
     let batch_size = config.gpu_batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
-    let runner = rt.block_on(GpuRunner::new(batch_size))?;
+    let runner = rt.block_on(GpuRunner::new(batch_size, GpuBackend::Auto))?;
     let runner = Arc::new(runner);
 
     rt.block_on(scan_gpu_with_runner(
@@ -1302,7 +1302,7 @@ pub fn scan_gpu_p2tr(
         .build()?;
 
     let batch_size = config.gpu_batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
-    let runner = rt.block_on(GpuRunner::new(batch_size))?;
+    let runner = rt.block_on(GpuRunner::new(batch_size, GpuBackend::Auto))?;
     let runner = Arc::new(runner);
 
     rt.block_on(scan_gpu_p2tr_with_runner(
