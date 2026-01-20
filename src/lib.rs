@@ -7,7 +7,7 @@ pub mod provider;
 pub mod scanner;
 
 pub use address::{AddressFormat, AddressGenerator, GeneratedAddress};
-pub use gpu::{scan_gpu_p2tr_with_runner, scan_gpu_with_runner, GpuRunner};
+pub use gpu::{scan_gpu_p2tr_with_runner, scan_gpu_with_runner, GpuBackend, GpuRunner};
 pub use pattern::Pattern;
 pub use scanner::{benchmark, scan, scan_with_progress, ProgressCallback, ScanConfig, ScanResult};
 
@@ -31,7 +31,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Sparkline};
 use ratatui::Terminal;
 use serde::Serialize;
-
 
 #[derive(Parser)]
 #[command(name = "vgen")]
@@ -74,6 +73,10 @@ enum Commands {
         /// GPU batch size (default: 1,048,576)
         #[arg(long, default_value = "1048576")]
         gpu_batch_size: u32,
+
+        /// GPU backend selection
+        #[arg(long, default_value = "auto")]
+        backend: GpuBackend,
 
         /// CPU batch size per thread (default: 10,000)
         #[arg(long, default_value = "10000")]
@@ -158,6 +161,10 @@ enum Commands {
         #[arg(long, default_value = "1048576")]
         gpu_batch_size: u32,
 
+        /// GPU backend selection
+        #[arg(long, default_value = "auto")]
+        backend: GpuBackend,
+
         /// Stop after finding N matches (0 = scan entire range)
         #[arg(short, long, default_value_t = 1)]
         count: usize,
@@ -188,6 +195,13 @@ enum Commands {
         /// Expected address (optional)
         #[arg(short, long)]
         address: Option<String>,
+    },
+
+    /// List available GPU adapters
+    ListGpus {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -244,6 +258,7 @@ struct TuiState {
     gpu_enabled: bool,
     tui_status_message: String,
     gpu_device_name: String,
+    gpu_backend: String,
 }
 
 pub fn run_from_args<I, S>(args: I) -> Result<()>
@@ -265,6 +280,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             threads,
             no_gpu,
             gpu_batch_size,
+            backend,
             cpu_batch_size,
             tui,
             no_tui,
@@ -274,11 +290,8 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             repeat,
             quiet,
         } => {
-            let (resolved_pattern, addr_format) = resolve_pattern_and_format(
-                &pattern,
-                prefix_length,
-                format.into(),
-            )?;
+            let (resolved_pattern, addr_format) =
+                resolve_pattern_and_format(&pattern, prefix_length, format.into())?;
 
             if tui {
                 eprintln!("Warning: --tui is deprecated. TUI is now enabled by default in interactive terminals.");
@@ -309,7 +322,18 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
 
             let repeat = if repeat == 0 { 1 } else { repeat };
 
-            run_search(&resolved_pattern, ignore_case, config, use_gpu, use_tui, quiet, output, file, repeat)
+            run_search(
+                &resolved_pattern,
+                ignore_case,
+                config,
+                use_gpu,
+                backend,
+                use_tui,
+                quiet,
+                output,
+                file,
+                repeat,
+            )
         }
 
         Commands::Estimate {
@@ -346,10 +370,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Commands::Verify {
-            key,
-            address,
-        } => {
+        Commands::Verify { key, address } => {
             use bitcoin::key::Secp256k1;
             use bitcoin::secp256k1::SecretKey;
             use bitcoin::{Address, CompressedPublicKey, Network, PrivateKey, PublicKey};
@@ -407,6 +428,13 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
+        Commands::ListGpus { json } => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(list_gpus(json))
+        }
+
         Commands::Range {
             range,
             puzzle,
@@ -416,6 +444,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             threads,
             no_gpu,
             gpu_batch_size,
+            backend,
             count,
             repeat,
             no_tui,
@@ -447,7 +476,18 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 end: Some(end_key),
             };
 
-            run_search(&resolved_pattern, false, config, use_gpu, use_tui, false, output, file, repeat)
+            run_search(
+                &resolved_pattern,
+                false,
+                config,
+                use_gpu,
+                backend,
+                use_tui,
+                false,
+                output,
+                file,
+                repeat,
+            )
         }
     }
 }
@@ -530,10 +570,7 @@ fn resolve_range_params(
     }
 }
 
-fn parse_explicit_range(
-    range: Option<String>,
-    puzzle: Option<u32>,
-) -> Result<(BigUint, BigUint)> {
+fn parse_explicit_range(range: Option<String>, puzzle: Option<u32>) -> Result<(BigUint, BigUint)> {
     if let Some(p) = puzzle {
         if p < 1 || p > 160 {
             anyhow::bail!("Puzzle number must be between 1 and 160");
@@ -550,7 +587,9 @@ fn parse_explicit_range(
         let end = BigUint::from_str_radix(parts[1], 16).context("Invalid end hex")?;
         Ok((start, end))
     } else {
-        anyhow::bail!("Either --range, --puzzle, or a provider pattern with key range must be specified")
+        anyhow::bail!(
+            "Either --range, --puzzle, or a provider pattern with key range must be specified"
+        )
     }
 }
 
@@ -560,6 +599,7 @@ fn run_search(
     ignore_case: bool,
     config: ScanConfig,
     gpu: bool,
+    backend: GpuBackend,
     use_tui: bool,
     quiet: bool,
     output: OutputFormat,
@@ -575,7 +615,9 @@ fn run_search(
     let invalid_chars = pat.validate_charset(config.format);
     if !invalid_chars.is_empty() {
         let format_name = match config.format {
-            AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed | AddressFormat::P2shP2wpkh => "Base58",
+            AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed | AddressFormat::P2shP2wpkh => {
+                "Base58"
+            }
             AddressFormat::P2wpkh | AddressFormat::P2tr => "Bech32",
             AddressFormat::Ethereum => "Hex",
         };
@@ -584,10 +626,17 @@ fn run_search(
             "Warning: Pattern contains characters not valid in {} addresses: '{}'",
             format_name, chars_str
         );
-        eprintln!("  {} alphabet excludes these characters - pattern will NEVER match!",
-            format_name);
-        if matches!(config.format, AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed | AddressFormat::P2shP2wpkh) {
-            eprintln!("  Base58 excludes: 0 (zero), O (uppercase o), I (uppercase i), l (lowercase L)");
+        eprintln!(
+            "  {} alphabet excludes these characters - pattern will NEVER match!",
+            format_name
+        );
+        if matches!(
+            config.format,
+            AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed | AddressFormat::P2shP2wpkh
+        ) {
+            eprintln!(
+                "  Base58 excludes: 0 (zero), O (uppercase o), I (uppercase i), l (lowercase L)"
+            );
         }
         eprintln!();
     }
@@ -595,17 +644,31 @@ fn run_search(
     // Initialize GPU runner if needed, BEFORE entering TUI loop
     let mut gpu_runner: Option<Arc<GpuRunner>> = None;
     if gpu {
-        if use_tui { eprintln!("Initializing GPU..."); }
+        if use_tui {
+            eprintln!("Initializing GPU...");
+        }
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        match rt.block_on(GpuRunner::new(config.gpu_batch_size.unwrap_or(1048576))) {
+        match rt.block_on(GpuRunner::new(
+            config.gpu_batch_size.unwrap_or(1048576),
+            backend,
+        )) {
             Ok(runner) => {
                 gpu_runner = Some(Arc::new(runner));
-                if use_tui { eprintln!("GPU initialized."); }
-            },
+                if use_tui {
+                    eprintln!("GPU initialized.");
+                }
+            }
             Err(e) => {
-                eprintln!("Failed to initialize GPU ({e:?}); falling back to CPU.");
+                if backend == GpuBackend::Auto {
+                    eprintln!("Failed to initialize GPU ({e:?}); falling back to CPU.");
+                } else {
+                    anyhow::bail!(
+                        "Failed to initialize GPU with backend {}: {e:?}",
+                        backend.name()
+                    );
+                }
             }
         }
     }
@@ -630,10 +693,7 @@ fn run_search(
                 .template("{spinner:.green} [{elapsed_precise}] {msg}")
                 .unwrap(),
         );
-        pb.set_message(format!(
-            "Searching for pattern '{}'...",
-            pattern
-        ));
+        pb.set_message(format!("Searching for pattern '{}'...", pattern));
         Some(pb)
     } else {
         None
@@ -728,22 +788,25 @@ fn run_search(
     };
 
     if matches!(output, OutputFormat::Csv) && !result.matches.is_empty() {
-        writeln!(writer, "address,wif,private_key_hex,format,pattern,operations,elapsed_secs,rate")?;
+        writeln!(
+            writer,
+            "address,wif,private_key_hex,format,pattern,operations,elapsed_secs,rate"
+        )?;
     }
     for (idx, addr) in result.matches.iter().enumerate() {
-            let vanity_result = VanityResult {
-                address: addr.address.clone(),
-                wif: addr.wif.clone(),
-                private_key_hex: addr.hex.clone(),
-                format: match config.format {
-                    AddressFormat::P2pkh => "P2PKH".to_string(),
-                    AddressFormat::P2wpkh => "P2WPKH".to_string(),
-                    AddressFormat::P2pkhUncompressed => "P2PKH (Uncompressed)".to_string(),
-                    AddressFormat::P2shP2wpkh => "P2SH-P2WPKH".to_string(),
-                    AddressFormat::P2tr => "P2TR".to_string(),
-                    AddressFormat::Ethereum => "Ethereum".to_string(),
-                },
-                pattern: pattern.to_string(),
+        let vanity_result = VanityResult {
+            address: addr.address.clone(),
+            wif: addr.wif.clone(),
+            private_key_hex: addr.hex.clone(),
+            format: match config.format {
+                AddressFormat::P2pkh => "P2PKH".to_string(),
+                AddressFormat::P2wpkh => "P2WPKH".to_string(),
+                AddressFormat::P2pkhUncompressed => "P2PKH (Uncompressed)".to_string(),
+                AddressFormat::P2shP2wpkh => "P2SH-P2WPKH".to_string(),
+                AddressFormat::P2tr => "P2TR".to_string(),
+                AddressFormat::Ethereum => "Ethereum".to_string(),
+            },
+            pattern: pattern.to_string(),
 
             operations: result.operations,
             elapsed_secs: result.elapsed_secs,
@@ -770,7 +833,11 @@ fn run_search(
                         format_with_commas(vanity_result.operations),
                         vanity_result.rate
                     )?;
-                    writeln!(writer, "Time    : {}", format_duration(vanity_result.elapsed_secs))?;
+                    writeln!(
+                        writer,
+                        "Time    : {}",
+                        format_duration(vanity_result.elapsed_secs)
+                    )?;
                 }
                 writeln!(writer)?;
             }
@@ -801,7 +868,11 @@ fn run_search(
     }
 
     if file.is_some() && !result.matches.is_empty() && !quiet {
-        eprintln!("Wrote {} result(s) to {:?}", result.matches.len(), file.as_ref().unwrap());
+        eprintln!(
+            "Wrote {} result(s) to {:?}",
+            result.matches.len(),
+            file.as_ref().unwrap()
+        );
     }
 
     if result.matches.is_empty() && !quiet {
@@ -810,6 +881,65 @@ fn run_search(
             format_with_commas(result.operations),
             format_duration(result.elapsed_secs)
         );
+    }
+
+    Ok(())
+}
+
+async fn list_gpus(json: bool) -> Result<()> {
+    #[derive(Serialize)]
+    struct AdapterOut {
+        name: String,
+        backend: String,
+        device_type: String,
+        software: bool,
+    }
+
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+
+    let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+    let adapters: Vec<_> = adapters.into_iter().collect();
+
+    let out: Vec<AdapterOut> = adapters
+        .iter()
+        .map(|adapter| {
+            let info = adapter.get_info();
+            let software = gpu::is_software_adapter(&info);
+            AdapterOut {
+                name: info.name,
+                backend: format!("{:?}", info.backend),
+                device_type: format!("{:?}", info.device_type),
+                software,
+            }
+        })
+        .collect();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    println!("Available GPUs:");
+    if out.is_empty() {
+        println!("  (none)");
+        return Ok(());
+    }
+
+    for (i, a) in out.iter().enumerate() {
+        let mut line = format!(
+            "  {}. {} ({}) - {}",
+            i + 1,
+            a.name,
+            a.backend,
+            a.device_type
+        );
+        if a.software {
+            line.push_str(" [software]");
+        }
+        println!("{}", line);
     }
 
     Ok(())
@@ -870,7 +1000,8 @@ fn run_tui(
         AddressFormat::P2shP2wpkh => "P2SH-P2WPKH",
         AddressFormat::P2tr => "P2TR",
         AddressFormat::Ethereum => "Ethereum",
-    }.to_string();
+    }
+    .to_string();
 
     let gpu_enabled = gpu_runner.is_some();
 
@@ -878,6 +1009,12 @@ fn run_tui(
         runner.device_name.clone()
     } else {
         "None".to_string()
+    };
+
+    let gpu_backend = if let Some(runner) = &gpu_runner {
+        runner.backend().to_string()
+    } else {
+        "CPU".to_string()
     };
 
     let difficulty = if config.start.is_some() {
@@ -895,6 +1032,7 @@ fn run_tui(
         gpu_enabled,
         tui_status_message: "Initializing...".to_string(),
         gpu_device_name,
+        gpu_backend,
         ..Default::default()
     }));
 
@@ -925,15 +1063,33 @@ fn run_tui(
                 .enable_all()
                 .build()?;
             let gpu_result = if config_clone.format == AddressFormat::P2tr {
-                rt_thread.block_on(scan_gpu_p2tr_with_runner(&pat, &config_clone, Some(progress_cb.clone()), Some(stop_clone.clone()), runner))
+                rt_thread.block_on(scan_gpu_p2tr_with_runner(
+                    &pat,
+                    &config_clone,
+                    Some(progress_cb.clone()),
+                    Some(stop_clone.clone()),
+                    runner,
+                ))
             } else {
-                rt_thread.block_on(scan_gpu_with_runner(&pat, &config_clone, Some(progress_cb.clone()), Some(stop_clone.clone()), runner))
+                rt_thread.block_on(scan_gpu_with_runner(
+                    &pat,
+                    &config_clone,
+                    Some(progress_cb.clone()),
+                    Some(stop_clone.clone()),
+                    runner,
+                ))
             };
             match gpu_result {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("GPU path failed in TUI thread ({e:?}); falling back to CPU.");
-                    state_for_progress.lock().unwrap().tui_status_message = format!("GPU failed: {}, falling back to CPU.", e).to_string();
+                    {
+                        let mut st = state_for_progress.lock().unwrap();
+                        st.tui_status_message = format!("GPU failed: {}, falling back to CPU.", e);
+                        st.gpu_enabled = false;
+                        st.gpu_backend = "CPU".to_string();
+                        st.gpu_device_name = String::new();
+                    }
                     scan_with_progress(&pat, &config_clone, Some(progress_cb), Some(stop_clone))
                 }
             }
@@ -946,16 +1102,20 @@ fn run_tui(
         st.operations = res.operations;
         st.elapsed = res.elapsed_secs;
         st.rate = res.rate();
-        st.matches = res.matches.iter().map(|addr| VanityResult {
-            address: addr.address.clone(),
-            wif: addr.wif.clone(),
-            private_key_hex: addr.hex.clone(),
-            format: format_label.clone(),
-            pattern: pattern_owned.clone(),
-            operations: res.operations,
-            elapsed_secs: res.elapsed_secs,
-            rate: res.rate(),
-        }).collect();
+        st.matches = res
+            .matches
+            .iter()
+            .map(|addr| VanityResult {
+                address: addr.address.clone(),
+                wif: addr.wif.clone(),
+                private_key_hex: addr.hex.clone(),
+                format: format_label.clone(),
+                pattern: pattern_owned.clone(),
+                operations: res.operations,
+                elapsed_secs: res.elapsed_secs,
+                rate: res.rate(),
+            })
+            .collect();
         st.done = true;
         st.tui_status_message = "Search complete.".to_string();
         Ok(())
@@ -963,7 +1123,7 @@ fn run_tui(
 
     // TUI Initialization
     match enable_raw_mode() {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) => {
             eprintln!("Failed to enable raw mode: {e:?}. Fallback to console.");
             return Err(e.into());
@@ -971,7 +1131,7 @@ fn run_tui(
     };
     let mut stdout = std::io::stdout();
     match crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen) {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) => {
             eprintln!("Failed to enter alternate screen: {e:?}. Fallback to console.");
             return Err(e.into());
@@ -1008,7 +1168,9 @@ fn run_tui(
                 .split(size);
 
             // --- 1. Top Bar ---
-            let title_style = Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD);
+            let title_style = Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD);
             let value_style = Style::default().fg(Color::Cyan);
 
             let mut top_text = vec![
@@ -1019,20 +1181,47 @@ fn run_tui(
                 Span::styled(format!(" {} ", st.format), value_style),
                 Span::raw(" │ "),
                 Span::styled(" Difficulty: ", Style::default().fg(Color::Gray)),
-                Span::styled(format!(" 1 in {} ", format_with_commas(st.difficulty)), value_style),
+                Span::styled(
+                    format!(" 1 in {} ", format_with_commas(st.difficulty)),
+                    value_style,
+                ),
                 Span::raw(" │ "),
                 Span::styled(" Mode: ", Style::default().fg(Color::Gray)),
                 Span::styled(
-                    if st.gpu_enabled { " GPU ACCELERATED " } else { " CPU STANDARD " },
-                    if st.gpu_enabled { Style::default().fg(Color::Green).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Yellow) }
+                    if st.gpu_enabled {
+                        " GPU ACCELERATED "
+                    } else {
+                        " CPU STANDARD "
+                    },
+                    if st.gpu_enabled {
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Yellow)
+                    },
                 ),
             ];
 
             if st.gpu_enabled {
                 top_text.push(Span::raw(" │ "));
                 top_text.push(Span::styled(" Device: ", Style::default().fg(Color::Gray)));
-                top_text.push(Span::styled(format!(" {} ", st.gpu_device_name), Style::default().fg(Color::Green)));
+                top_text.push(Span::styled(
+                    format!(" {} ", st.gpu_device_name),
+                    Style::default().fg(Color::Green),
+                ));
             }
+
+            top_text.push(Span::raw(" │ "));
+            top_text.push(Span::styled(" Backend: ", Style::default().fg(Color::Gray)));
+            top_text.push(Span::styled(
+                format!(" {} ", st.gpu_backend),
+                if st.gpu_enabled {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                },
+            ));
 
             let top_block = Block::default()
                 .borders(Borders::ALL)
@@ -1040,7 +1229,9 @@ fn run_tui(
                 .border_style(Style::default().fg(Color::DarkGray))
                 .title(Span::styled(" VGEN ", title_style));
 
-            let top_para = Paragraph::new(Line::from(top_text)).block(top_block).alignment(ratatui::layout::Alignment::Center);
+            let top_para = Paragraph::new(Line::from(top_text))
+                .block(top_block)
+                .alignment(ratatui::layout::Alignment::Center);
             f.render_widget(top_para, chunks[0]);
 
             // --- 2. Dashboard (Split Left/Right) ---
@@ -1050,25 +1241,45 @@ fn run_tui(
                 .split(chunks[1]);
 
             // Left: Numeric Stats
-            let rate_color = if st.rate > 500_000.0 { Color::Green } else if st.rate > 100_000.0 { Color::Yellow } else { Color::Red };
+            let rate_color = if st.rate > 500_000.0 {
+                Color::Green
+            } else if st.rate > 100_000.0 {
+                Color::Yellow
+            } else {
+                Color::Red
+            };
 
             let mut stats_text = vec![
                 Line::from(vec![
                     Span::styled("Status:    ", Style::default().fg(Color::Gray)),
-                    Span::styled(&st.tui_status_message, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+                    Span::styled(
+                        &st.tui_status_message,
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ]),
                 Line::from(""),
                 Line::from(vec![
                     Span::styled("Hashrate:  ", Style::default().fg(Color::Gray)),
-                    Span::styled(format!("{:.0} keys/s", st.rate), Style::default().fg(rate_color).add_modifier(Modifier::BOLD))
+                    Span::styled(
+                        format!("{:.0} keys/s", st.rate),
+                        Style::default().fg(rate_color).add_modifier(Modifier::BOLD),
+                    ),
                 ]),
                 Line::from(vec![
                     Span::styled("Checked:   ", Style::default().fg(Color::Gray)),
-                    Span::styled(format_with_commas(st.operations), Style::default().fg(Color::Cyan))
+                    Span::styled(
+                        format_with_commas(st.operations),
+                        Style::default().fg(Color::Cyan),
+                    ),
                 ]),
                 Line::from(vec![
                     Span::styled("Elapsed:   ", Style::default().fg(Color::Gray)),
-                    Span::styled(format_duration(st.elapsed), Style::default().fg(Color::Cyan))
+                    Span::styled(
+                        format_duration(st.elapsed),
+                        Style::default().fg(Color::Cyan),
+                    ),
                 ]),
             ];
 
@@ -1077,19 +1288,33 @@ fn run_tui(
                 let factor = st.operations as f64 / st.difficulty as f64;
                 let (luck_label, luck_style) = if factor < 1.0 {
                     let speedup = 1.0 / factor.max(0.0001);
-                    (format!("Lucky ({:.1}x faster)", speedup), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+                    (
+                        format!("Lucky ({:.1}x faster)", speedup),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    )
                 } else {
-                    (format!("Unlucky ({:.1}x slower)", factor), Style::default().fg(if factor > 3.0 { Color::Red } else { Color::Yellow }).add_modifier(Modifier::BOLD))
+                    (
+                        format!("Unlucky ({:.1}x slower)", factor),
+                        Style::default()
+                            .fg(if factor > 3.0 {
+                                Color::Red
+                            } else {
+                                Color::Yellow
+                            })
+                            .add_modifier(Modifier::BOLD),
+                    )
                 };
 
                 stats_text.push(Line::from(vec![
                     Span::styled("Luck:      ", Style::default().fg(Color::Gray)),
-                    Span::styled(luck_label, luck_style)
+                    Span::styled(luck_label, luck_style),
                 ]));
             } else {
-                 stats_text.push(Line::from(vec![
+                stats_text.push(Line::from(vec![
                     Span::styled("Luck:      ", Style::default().fg(Color::Gray)),
-                    Span::styled("-", Style::default().fg(Color::DarkGray))
+                    Span::styled("-", Style::default().fg(Color::DarkGray)),
                 ]));
             }
 
@@ -1098,7 +1323,9 @@ fn run_tui(
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::DarkGray))
                 .title(" Statistics ");
-            let stats_para = Paragraph::new(stats_text).block(stats_block).alignment(ratatui::layout::Alignment::Left);
+            let stats_para = Paragraph::new(stats_text)
+                .block(stats_block)
+                .alignment(ratatui::layout::Alignment::Left);
             f.render_widget(stats_para, dash_chunks[0]);
 
             // Right: Chart
@@ -1116,22 +1343,42 @@ fn run_tui(
 
             // --- 3. Matches List ---
             let items: Vec<ListItem> = if st.matches.is_empty() {
-                vec![ListItem::new(Span::styled(" Waiting for matches...", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)))]
+                vec![ListItem::new(Span::styled(
+                    " Waiting for matches...",
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                ))]
             } else {
-                st.matches.iter().enumerate().map(|(i, m)| {
-                    ListItem::new(vec![
-                        Line::from(vec![
-                            Span::styled(format!(" MATCH #{} ", i + 1), Style::default().bg(Color::Green).fg(Color::Black).add_modifier(Modifier::BOLD)),
-                            Span::raw(" "),
-                            Span::styled(&m.address, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        ]),
-                        Line::from(vec![
-                            Span::raw("    WIF: "),
-                            Span::styled(&m.wif, Style::default().fg(Color::Gray)),
-                        ]),
-                        Line::from(""),
-                    ])
-                }).collect()
+                st.matches
+                    .iter()
+                    .enumerate()
+                    .map(|(i, m)| {
+                        ListItem::new(vec![
+                            Line::from(vec![
+                                Span::styled(
+                                    format!(" MATCH #{} ", i + 1),
+                                    Style::default()
+                                        .bg(Color::Green)
+                                        .fg(Color::Black)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Span::raw(" "),
+                                Span::styled(
+                                    &m.address,
+                                    Style::default()
+                                        .fg(Color::Green)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                            ]),
+                            Line::from(vec![
+                                Span::raw("    WIF: "),
+                                Span::styled(&m.wif, Style::default().fg(Color::Gray)),
+                            ]),
+                            Line::from(""),
+                        ])
+                    })
+                    .collect()
             };
 
             let matches_block = Block::default()
@@ -1144,12 +1391,18 @@ fn run_tui(
 
             // --- 4. Footer ---
             let footer_text = Line::from(vec![
-                Span::styled(" Q ", Style::default().bg(Color::Red).fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " Q ",
+                    Style::default()
+                        .bg(Color::Red)
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" Quit ", Style::default().fg(Color::Gray)),
             ]);
-            let footer_para = Paragraph::new(footer_text).alignment(ratatui::layout::Alignment::Right);
+            let footer_para =
+                Paragraph::new(footer_text).alignment(ratatui::layout::Alignment::Right);
             f.render_widget(footer_para, chunks[3]);
-
         })?;
 
         // Input Handling

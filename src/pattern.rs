@@ -49,9 +49,9 @@ impl Pattern {
     pub fn validate_charset(&self, format: AddressFormat) -> Vec<char> {
         let valid_chars: &str = match format {
             // Base58: excludes 0, O, I, l
-            AddressFormat::P2pkh
-            | AddressFormat::P2pkhUncompressed
-            | AddressFormat::P2shP2wpkh => "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
+            AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed | AddressFormat::P2shP2wpkh => {
+                "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+            }
             // Bech32: lowercase only, excludes 1, b, i, o
             AddressFormat::P2wpkh | AddressFormat::P2tr => "023456789acdefghjklmnpqrstuvwxyz",
             // Hex: 0-9, a-f (case insensitive but we check lowercase)
@@ -122,10 +122,18 @@ impl Pattern {
             let pattern_after_anchor = &self.original[1..];
             match format {
                 AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed => {
-                    if pattern_after_anchor.starts_with('1') { 1 } else { 0 }
+                    if pattern_after_anchor.starts_with('1') {
+                        1
+                    } else {
+                        0
+                    }
                 }
                 AddressFormat::P2shP2wpkh => {
-                    if pattern_after_anchor.starts_with('3') { 1 } else { 0 }
+                    if pattern_after_anchor.starts_with('3') {
+                        1
+                    } else {
+                        0
+                    }
                 }
                 AddressFormat::P2wpkh => {
                     // bc1q prefix
@@ -157,7 +165,9 @@ impl Pattern {
                 }
                 AddressFormat::Ethereum => {
                     // 0x prefix
-                    if pattern_after_anchor.starts_with("0x") || pattern_after_anchor.starts_with("0X") {
+                    if pattern_after_anchor.starts_with("0x")
+                        || pattern_after_anchor.starts_with("0X")
+                    {
                         2
                     } else if pattern_after_anchor.starts_with('0') {
                         1

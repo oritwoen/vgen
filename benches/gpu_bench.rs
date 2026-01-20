@@ -1,8 +1,8 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use vgen::{Pattern, ScanConfig, AddressFormat, scan_gpu_with_runner};
-use vgen::gpu::GpuRunner;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use vgen::gpu::{GpuBackend, GpuRunner};
+use vgen::{scan_gpu_with_runner, AddressFormat, Pattern, ScanConfig};
 
 fn bench_gpu_batches(c: &mut Criterion) {
     // Fixed trivial pattern and format to isolate batch size effects.
@@ -30,7 +30,9 @@ fn bench_gpu_batches(c: &mut Criterion) {
                     .enable_all()
                     .build()
                     .unwrap();
-                let runner = rt.block_on(GpuRunner::new(batch_size)).unwrap();
+                let runner = rt
+                    .block_on(GpuRunner::new(batch_size, GpuBackend::Auto))
+                    .unwrap();
                 let runner = Arc::new(runner);
                 let mut config = config_base.clone();
                 config.gpu_batch_size = Some(batch_size);

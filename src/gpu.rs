@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+use clap::ValueEnum;
 use num_bigint::BigUint;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -13,6 +14,70 @@ use wgpu::util::DeviceExt;
 
 use crate::address::{AddressFormat, AddressGenerator, GeneratedAddress};
 use crate::{Pattern, ProgressCallback, ScanConfig, ScanResult};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum GpuBackend {
+    #[default]
+    Auto,
+    Vulkan,
+    Metal,
+    Dx12,
+    Gl,
+}
+
+impl GpuBackend {
+    pub fn to_wgpu_backends(self) -> wgpu::Backends {
+        match self {
+            GpuBackend::Auto => wgpu::Backends::all(),
+            GpuBackend::Vulkan => wgpu::Backends::VULKAN,
+            GpuBackend::Metal => wgpu::Backends::METAL,
+            GpuBackend::Dx12 => wgpu::Backends::DX12,
+            GpuBackend::Gl => wgpu::Backends::GL,
+        }
+    }
+
+    pub fn fallback_order() -> &'static [GpuBackend] {
+        &[
+            GpuBackend::Vulkan,
+            GpuBackend::Metal,
+            GpuBackend::Dx12,
+            GpuBackend::Gl,
+        ]
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            GpuBackend::Auto => "auto",
+            GpuBackend::Vulkan => "Vulkan",
+            GpuBackend::Metal => "Metal",
+            GpuBackend::Dx12 => "DX12",
+            GpuBackend::Gl => "OpenGL",
+        }
+    }
+}
+
+impl std::fmt::Display for GpuBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+pub(crate) fn is_software_adapter(info: &wgpu::AdapterInfo) -> bool {
+    if info.device_type == wgpu::DeviceType::Cpu {
+        return true;
+    }
+
+    let name = info.name.to_lowercase();
+    [
+        "llvmpipe",
+        "swiftshader",
+        "lavapipe",
+        "software",
+        "mesa software",
+    ]
+    .iter()
+    .any(|needle| name.contains(needle))
+}
 
 // Default batch size (can be overridden by config)
 const DEFAULT_BATCH_SIZE: u32 = 1024 * 1024; // 1 Million
@@ -60,44 +125,94 @@ pub struct GpuRunner {
     frames: Vec<Frame>,
     pub batch_size: u32,
     pub device_name: String,
+    backend: GpuBackend,
 }
 
 impl GpuRunner {
-    pub async fn new(batch_size: u32) -> Result<Self> {
-        eprintln!("Requesting GPU instance (prefer Vulkan)...");
-        let mut instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            ..Default::default()
-        });
+    pub fn backend(&self) -> GpuBackend {
+        self.backend
+    }
 
-        eprintln!("Requesting adapter...");
-        let mut adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await;
-
-        if adapter.is_none() {
-            eprintln!("Vulkan adapter not found; falling back to GL backend.");
-            instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::GL,
-                ..Default::default()
-            });
-            adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: None,
-                    force_fallback_adapter: false,
-                })
-                .await;
+    pub async fn new(batch_size: u32, backend: GpuBackend) -> Result<Self> {
+        fn device_type_priority(device_type: wgpu::DeviceType) -> u8 {
+            match device_type {
+                wgpu::DeviceType::DiscreteGpu => 0,
+                wgpu::DeviceType::VirtualGpu => 1,
+                wgpu::DeviceType::IntegratedGpu => 2,
+                wgpu::DeviceType::Cpu => 3,
+                _ => 4,
+            }
         }
 
-        let adapter = adapter.context("Failed to find suitable GPU adapter")?;
+        let (_instance, adapter, selected_backend) = match backend {
+            GpuBackend::Auto => {
+                let mut selected: Option<(wgpu::Instance, wgpu::Adapter, GpuBackend)> = None;
+
+                for &candidate in GpuBackend::fallback_order() {
+                    let backends = candidate.to_wgpu_backends();
+                    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                        backends,
+                        ..Default::default()
+                    });
+
+                    let mut adapters = instance.enumerate_adapters(backends);
+                    adapters.retain(|a| !is_software_adapter(&a.get_info()));
+                    adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
+
+                    if let Some(adapter) = adapters.into_iter().next() {
+                        selected = Some((instance, adapter, candidate));
+                        break;
+                    }
+                }
+
+                if selected.is_none() {
+                    for &candidate in GpuBackend::fallback_order() {
+                        let backends = candidate.to_wgpu_backends();
+                        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                            backends,
+                            ..Default::default()
+                        });
+
+                        let mut adapters = instance.enumerate_adapters(backends);
+                        adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
+
+                        if let Some(adapter) = adapters.into_iter().next() {
+                            selected = Some((instance, adapter, candidate));
+                            break;
+                        }
+                    }
+                }
+
+                selected.context("No GPU backends available")?
+            }
+            _ => {
+                let backends = backend.to_wgpu_backends();
+                let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                    backends,
+                    ..Default::default()
+                });
+
+                let mut adapters = instance.enumerate_adapters(backends);
+                if adapters.is_empty() {
+                    anyhow::bail!("Backend {} not available on this system", backend.name());
+                }
+
+                adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
+                let adapter = adapters
+                    .into_iter()
+                    .next()
+                    .context("Failed to select GPU adapter")?;
+
+                (instance, adapter, backend)
+            }
+        };
+
         let adapter_info = adapter.get_info();
-        eprintln!("Found adapter: {:?}", adapter_info);
-        let device_name = adapter_info.name;
+        eprintln!(
+            "Using GPU backend {} with adapter: {:?}",
+            selected_backend, adapter_info
+        );
+        let device_name = adapter_info.name.clone();
 
         let (device, queue) = adapter
             .request_device(
@@ -355,10 +470,7 @@ impl GpuRunner {
             });
         }
 
-        eprintln!(
-            "Initializing lookup table on GPU (size: {})...",
-            batch_size
-        );
+        eprintln!("Initializing lookup table on GPU (size: {})...", batch_size);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Init Encoder"),
         });
@@ -386,6 +498,7 @@ impl GpuRunner {
             frames,
             batch_size,
             device_name,
+            backend: selected_backend,
         })
     }
 
@@ -593,10 +706,7 @@ impl GpuRunner {
     }
 
     /// Await P2TR result (X coordinates as 32-byte arrays)
-    pub async fn await_result_p2tr(
-        &self,
-        frame_index: usize,
-    ) -> Result<(Vec<[u8; 32]>, [u8; 32])> {
+    pub async fn await_result_p2tr(&self, frame_index: usize) -> Result<(Vec<[u8; 32]>, [u8; 32])> {
         let frame = &self.frames[frame_index];
 
         loop {
@@ -964,10 +1074,16 @@ pub fn scan_gpu(
         .build()?;
 
     let batch_size = config.gpu_batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
-    let runner = rt.block_on(GpuRunner::new(batch_size))?;
+    let runner = rt.block_on(GpuRunner::new(batch_size, GpuBackend::Auto))?;
     let runner = Arc::new(runner);
 
-    rt.block_on(scan_gpu_with_runner(pattern, config, progress_cb, stop, runner))
+    rt.block_on(scan_gpu_with_runner(
+        pattern,
+        config,
+        progress_cb,
+        stop,
+        runner,
+    ))
 }
 
 /// Convert GPU limbs (little-endian u32 array) to big-endian bytes
@@ -1118,7 +1234,8 @@ pub async fn scan_gpu_p2tr_with_runner(
 
                 // GPU returns internal X, CPU applies Taproot tweak
                 let internal_key = XOnlyPublicKey::from_slice(&x_bytes).ok()?;
-                let addr = bitcoin::Address::p2tr(&secp, internal_key, None, bitcoin::Network::Bitcoin);
+                let addr =
+                    bitcoin::Address::p2tr(&secp, internal_key, None, bitcoin::Network::Bitcoin);
                 let addr_string = addr.to_string();
 
                 if pattern.matches(&addr_string) {
@@ -1184,7 +1301,7 @@ pub fn scan_gpu_p2tr(
         .build()?;
 
     let batch_size = config.gpu_batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
-    let runner = rt.block_on(GpuRunner::new(batch_size))?;
+    let runner = rt.block_on(GpuRunner::new(batch_size, GpuBackend::Auto))?;
     let runner = Arc::new(runner);
 
     rt.block_on(scan_gpu_p2tr_with_runner(
@@ -1194,4 +1311,93 @@ pub fn scan_gpu_p2tr(
         stop,
         runner,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gpu_backend_to_wgpu_backends() {
+        assert_eq!(GpuBackend::Auto.to_wgpu_backends(), wgpu::Backends::all());
+        assert_eq!(
+            GpuBackend::Vulkan.to_wgpu_backends(),
+            wgpu::Backends::VULKAN
+        );
+        assert_eq!(GpuBackend::Metal.to_wgpu_backends(), wgpu::Backends::METAL);
+        assert_eq!(GpuBackend::Dx12.to_wgpu_backends(), wgpu::Backends::DX12);
+        assert_eq!(GpuBackend::Gl.to_wgpu_backends(), wgpu::Backends::GL);
+    }
+
+    #[test]
+    fn test_gpu_backend_fallback_order() {
+        assert_eq!(
+            GpuBackend::fallback_order(),
+            &[
+                GpuBackend::Vulkan,
+                GpuBackend::Metal,
+                GpuBackend::Dx12,
+                GpuBackend::Gl
+            ]
+        );
+    }
+
+    #[test]
+    fn test_gpu_backend_display() {
+        assert_eq!(GpuBackend::Auto.to_string(), "auto");
+        assert_eq!(GpuBackend::Vulkan.to_string(), "Vulkan");
+        assert_eq!(GpuBackend::Metal.to_string(), "Metal");
+        assert_eq!(GpuBackend::Dx12.to_string(), "DX12");
+        assert_eq!(GpuBackend::Gl.to_string(), "OpenGL");
+    }
+
+    fn adapter_info(name: &str, device_type: wgpu::DeviceType) -> wgpu::AdapterInfo {
+        wgpu::AdapterInfo {
+            name: name.to_string(),
+            vendor: 0,
+            device: 0,
+            device_type,
+            driver: String::new(),
+            driver_info: String::new(),
+            backend: wgpu::Backend::Vulkan,
+        }
+    }
+
+    #[test]
+    fn test_is_software_adapter() {
+        assert!(is_software_adapter(&adapter_info(
+            "anything",
+            wgpu::DeviceType::Cpu
+        )));
+
+        assert!(is_software_adapter(&adapter_info(
+            "llvmpipe (LLVM 16.0.6, 256 bits)",
+            wgpu::DeviceType::IntegratedGpu
+        )));
+        assert!(is_software_adapter(&adapter_info(
+            "SwiftShader Device (Subzero)",
+            wgpu::DeviceType::IntegratedGpu
+        )));
+        assert!(is_software_adapter(&adapter_info(
+            "lavapipe",
+            wgpu::DeviceType::IntegratedGpu
+        )));
+        assert!(is_software_adapter(&adapter_info(
+            "Software Rasterizer",
+            wgpu::DeviceType::IntegratedGpu
+        )));
+        assert!(is_software_adapter(&adapter_info(
+            "Mesa Software Rasterizer",
+            wgpu::DeviceType::IntegratedGpu
+        )));
+
+        assert!(!is_software_adapter(&adapter_info(
+            "NVIDIA GeForce RTX 3080",
+            wgpu::DeviceType::DiscreteGpu
+        )));
+        assert!(!is_software_adapter(&adapter_info(
+            "AMD Radeon RX 6800",
+            wgpu::DeviceType::DiscreteGpu
+        )));
+    }
 }
