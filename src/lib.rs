@@ -661,7 +661,14 @@ fn run_search(
                 }
             }
             Err(e) => {
-                eprintln!("Failed to initialize GPU ({e:?}); falling back to CPU.");
+                if backend == GpuBackend::Auto {
+                    eprintln!("Failed to initialize GPU ({e:?}); falling back to CPU.");
+                } else {
+                    anyhow::bail!(
+                        "Failed to initialize GPU with backend {}: {e:?}",
+                        backend.name()
+                    );
+                }
             }
         }
     }
