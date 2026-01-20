@@ -258,6 +258,7 @@ struct TuiState {
     gpu_enabled: bool,
     tui_status_message: String,
     gpu_device_name: String,
+    gpu_backend: String,
 }
 
 pub fn run_from_args<I, S>(args: I) -> Result<()>
@@ -1003,6 +1004,12 @@ fn run_tui(
         "None".to_string()
     };
 
+    let gpu_backend = if let Some(runner) = &gpu_runner {
+        runner.backend().to_string()
+    } else {
+        "CPU".to_string()
+    };
+
     let difficulty = if config.start.is_some() {
         // Difficulty doesn't apply to range scan in the same way (it's 100% chance if in range)
         // But estimate_difficulty is for random search.
@@ -1018,6 +1025,7 @@ fn run_tui(
         gpu_enabled,
         tui_status_message: "Initializing...".to_string(),
         gpu_device_name,
+        gpu_backend,
         ..Default::default()
     }));
 
@@ -1191,6 +1199,17 @@ fn run_tui(
                     Style::default().fg(Color::Green),
                 ));
             }
+
+            top_text.push(Span::raw(" │ "));
+            top_text.push(Span::styled(" Backend: ", Style::default().fg(Color::Gray)));
+            top_text.push(Span::styled(
+                format!(" {} ", st.gpu_backend),
+                if st.gpu_enabled {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                },
+            ));
 
             let top_block = Block::default()
                 .borders(Borders::ALL)
