@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use rand::{Rng, SeedableRng};
 use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use vgen::{AddressFormat, AddressGenerator, Pattern};
 
 fn bench_address_generation(c: &mut Criterion) {

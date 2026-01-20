@@ -119,8 +119,7 @@ pub fn scan_with_progress(
                 .into_par_iter()
                 .filter_map(|_| {
                     // Fast bail-out if we already have enough
-                    if stop.load(Ordering::Relaxed)
-                        || found.load(Ordering::Relaxed) >= config.count
+                    if stop.load(Ordering::Relaxed) || found.load(Ordering::Relaxed) >= config.count
                     {
                         return None;
                     }
@@ -220,9 +219,10 @@ fn scan_range_cpu(
     let matches = Arc::new(std::sync::Mutex::new(Vec::new()));
 
     let start_key = config.start.clone().unwrap_or_else(BigUint::one);
-    let end_key = config.end.clone().unwrap_or_else(|| {
-        &start_key + BigUint::from(u64::MAX)
-    });
+    let end_key = config
+        .end
+        .clone()
+        .unwrap_or_else(|| &start_key + BigUint::from(u64::MAX));
 
     let total_keys = &end_key - &start_key + 1u32;
     let total_keys_u64 = total_keys.to_u64().unwrap_or(u64::MAX);

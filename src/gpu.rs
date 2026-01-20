@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+use clap::ValueEnum;
 use num_bigint::BigUint;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -13,6 +14,71 @@ use wgpu::util::DeviceExt;
 
 use crate::address::{AddressFormat, AddressGenerator, GeneratedAddress};
 use crate::{Pattern, ProgressCallback, ScanConfig, ScanResult};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum GpuBackend {
+    #[default]
+    Auto,
+    Vulkan,
+    Metal,
+    Dx12,
+    Gl,
+}
+
+impl GpuBackend {
+    pub fn to_wgpu_backends(self) -> wgpu::Backends {
+        match self {
+            GpuBackend::Auto => wgpu::Backends::all(),
+            GpuBackend::Vulkan => wgpu::Backends::VULKAN,
+            GpuBackend::Metal => wgpu::Backends::METAL,
+            GpuBackend::Dx12 => wgpu::Backends::DX12,
+            GpuBackend::Gl => wgpu::Backends::GL,
+        }
+    }
+
+    pub fn fallback_order() -> &'static [GpuBackend] {
+        &[
+            GpuBackend::Vulkan,
+            GpuBackend::Metal,
+            GpuBackend::Dx12,
+            GpuBackend::Gl,
+        ]
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            GpuBackend::Auto => "auto",
+            GpuBackend::Vulkan => "Vulkan",
+            GpuBackend::Metal => "Metal",
+            GpuBackend::Dx12 => "DX12",
+            GpuBackend::Gl => "OpenGL",
+        }
+    }
+}
+
+impl std::fmt::Display for GpuBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+#[allow(dead_code)]
+fn is_software_adapter(info: &wgpu::AdapterInfo) -> bool {
+    if info.device_type == wgpu::DeviceType::Cpu {
+        return true;
+    }
+
+    let name = info.name.to_lowercase();
+    [
+        "llvmpipe",
+        "swiftshader",
+        "lavapipe",
+        "software",
+        "mesa software",
+    ]
+    .iter()
+    .any(|needle| name.contains(needle))
+}
 
 // Default batch size (can be overridden by config)
 const DEFAULT_BATCH_SIZE: u32 = 1024 * 1024; // 1 Million
@@ -355,10 +421,7 @@ impl GpuRunner {
             });
         }
 
-        eprintln!(
-            "Initializing lookup table on GPU (size: {})...",
-            batch_size
-        );
+        eprintln!("Initializing lookup table on GPU (size: {})...", batch_size);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Init Encoder"),
         });
@@ -593,10 +656,7 @@ impl GpuRunner {
     }
 
     /// Await P2TR result (X coordinates as 32-byte arrays)
-    pub async fn await_result_p2tr(
-        &self,
-        frame_index: usize,
-    ) -> Result<(Vec<[u8; 32]>, [u8; 32])> {
+    pub async fn await_result_p2tr(&self, frame_index: usize) -> Result<(Vec<[u8; 32]>, [u8; 32])> {
         let frame = &self.frames[frame_index];
 
         loop {
@@ -967,7 +1027,13 @@ pub fn scan_gpu(
     let runner = rt.block_on(GpuRunner::new(batch_size))?;
     let runner = Arc::new(runner);
 
-    rt.block_on(scan_gpu_with_runner(pattern, config, progress_cb, stop, runner))
+    rt.block_on(scan_gpu_with_runner(
+        pattern,
+        config,
+        progress_cb,
+        stop,
+        runner,
+    ))
 }
 
 /// Convert GPU limbs (little-endian u32 array) to big-endian bytes
@@ -1118,7 +1184,8 @@ pub async fn scan_gpu_p2tr_with_runner(
 
                 // GPU returns internal X, CPU applies Taproot tweak
                 let internal_key = XOnlyPublicKey::from_slice(&x_bytes).ok()?;
-                let addr = bitcoin::Address::p2tr(&secp, internal_key, None, bitcoin::Network::Bitcoin);
+                let addr =
+                    bitcoin::Address::p2tr(&secp, internal_key, None, bitcoin::Network::Bitcoin);
                 let addr_string = addr.to_string();
 
                 if pattern.matches(&addr_string) {
