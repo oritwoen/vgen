@@ -1083,8 +1083,13 @@ fn run_tui(
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("GPU path failed in TUI thread ({e:?}); falling back to CPU.");
-                    state_for_progress.lock().unwrap().tui_status_message =
-                        format!("GPU failed: {}, falling back to CPU.", e).to_string();
+                    {
+                        let mut st = state_for_progress.lock().unwrap();
+                        st.tui_status_message = format!("GPU failed: {}, falling back to CPU.", e);
+                        st.gpu_enabled = false;
+                        st.gpu_backend = "CPU".to_string();
+                        st.gpu_device_name = String::new();
+                    }
                     scan_with_progress(&pat, &config_clone, Some(progress_cb), Some(stop_clone))
                 }
             }
