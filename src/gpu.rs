@@ -1313,3 +1313,92 @@ pub fn scan_gpu_p2tr(
         runner,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gpu_backend_to_wgpu_backends() {
+        assert_eq!(GpuBackend::Auto.to_wgpu_backends(), wgpu::Backends::all());
+        assert_eq!(
+            GpuBackend::Vulkan.to_wgpu_backends(),
+            wgpu::Backends::VULKAN
+        );
+        assert_eq!(GpuBackend::Metal.to_wgpu_backends(), wgpu::Backends::METAL);
+        assert_eq!(GpuBackend::Dx12.to_wgpu_backends(), wgpu::Backends::DX12);
+        assert_eq!(GpuBackend::Gl.to_wgpu_backends(), wgpu::Backends::GL);
+    }
+
+    #[test]
+    fn test_gpu_backend_fallback_order() {
+        assert_eq!(
+            GpuBackend::fallback_order(),
+            &[
+                GpuBackend::Vulkan,
+                GpuBackend::Metal,
+                GpuBackend::Dx12,
+                GpuBackend::Gl
+            ]
+        );
+    }
+
+    #[test]
+    fn test_gpu_backend_display() {
+        assert_eq!(GpuBackend::Auto.to_string(), "auto");
+        assert_eq!(GpuBackend::Vulkan.to_string(), "Vulkan");
+        assert_eq!(GpuBackend::Metal.to_string(), "Metal");
+        assert_eq!(GpuBackend::Dx12.to_string(), "DX12");
+        assert_eq!(GpuBackend::Gl.to_string(), "OpenGL");
+    }
+
+    fn adapter_info(name: &str, device_type: wgpu::DeviceType) -> wgpu::AdapterInfo {
+        wgpu::AdapterInfo {
+            name: name.to_string(),
+            vendor: 0,
+            device: 0,
+            device_type,
+            driver: String::new(),
+            driver_info: String::new(),
+            backend: wgpu::Backend::Vulkan,
+        }
+    }
+
+    #[test]
+    fn test_is_software_adapter() {
+        assert!(is_software_adapter(&adapter_info(
+            "anything",
+            wgpu::DeviceType::Cpu
+        )));
+
+        assert!(is_software_adapter(&adapter_info(
+            "llvmpipe (LLVM 16.0.6, 256 bits)",
+            wgpu::DeviceType::IntegratedGpu
+        )));
+        assert!(is_software_adapter(&adapter_info(
+            "SwiftShader Device (Subzero)",
+            wgpu::DeviceType::IntegratedGpu
+        )));
+        assert!(is_software_adapter(&adapter_info(
+            "lavapipe",
+            wgpu::DeviceType::IntegratedGpu
+        )));
+        assert!(is_software_adapter(&adapter_info(
+            "Software Rasterizer",
+            wgpu::DeviceType::IntegratedGpu
+        )));
+        assert!(is_software_adapter(&adapter_info(
+            "Mesa Software Rasterizer",
+            wgpu::DeviceType::IntegratedGpu
+        )));
+
+        assert!(!is_software_adapter(&adapter_info(
+            "NVIDIA GeForce RTX 3080",
+            wgpu::DeviceType::DiscreteGpu
+        )));
+        assert!(!is_software_adapter(&adapter_info(
+            "AMD Radeon RX 6800",
+            wgpu::DeviceType::DiscreteGpu
+        )));
+    }
+}
