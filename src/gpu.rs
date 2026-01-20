@@ -62,7 +62,6 @@ impl std::fmt::Display for GpuBackend {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn is_software_adapter(info: &wgpu::AdapterInfo) -> bool {
     if info.device_type == wgpu::DeviceType::Cpu {
         return true;
