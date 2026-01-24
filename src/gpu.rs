@@ -486,7 +486,7 @@ impl GpuRunner {
             cpass.dispatch_workgroups(workgroups, 1, 1);
         }
         queue.submit(Some(encoder.finish()));
-        device.poll(wgpu::PollType::wait_indefinitely()).ok();
+        device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| anyhow::anyhow!("Device poll failed during init: {e:?}"))?;
         eprintln!("Initialization complete.");
 
         Ok(Self {
@@ -574,7 +574,7 @@ impl GpuRunner {
         let frame = &self.frames[frame_index];
 
         loop {
-            self.device.poll(wgpu::PollType::Poll).ok();
+            self.device.poll(wgpu::PollType::Poll).map_err(|e| anyhow::anyhow!("Device poll failed: {e:?}"))?;
 
             let mut guard = frame.receiver.lock().unwrap();
             if let Some(rx) = guard.as_mut() {
@@ -711,7 +711,7 @@ impl GpuRunner {
         let frame = &self.frames[frame_index];
 
         loop {
-            self.device.poll(wgpu::PollType::Poll).ok();
+            self.device.poll(wgpu::PollType::Poll).map_err(|e| anyhow::anyhow!("Device poll failed: {e:?}"))?;
 
             let mut guard = frame.receiver.lock().unwrap();
             if let Some(rx) = guard.as_mut() {
