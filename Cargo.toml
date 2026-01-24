@@ -11,7 +11,7 @@ categories = ["cryptography", "command-line-utilities"]
 
 [dependencies]
 # GPU Compute
-wgpu = "24.0"
+wgpu = "28"
 pollster = "0.4"
 bytemuck = { version = "1.19", features = ["derive"] }
 
