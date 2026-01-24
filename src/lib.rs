@@ -900,7 +900,7 @@ async fn list_gpus(json: bool) -> Result<()> {
         ..Default::default()
     });
 
-    let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+    let adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
     let adapters: Vec<_> = adapters.into_iter().collect();
 
     let out: Vec<AdapterOut> = adapters

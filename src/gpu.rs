@@ -155,7 +155,7 @@ impl GpuRunner {
                         ..Default::default()
                     });
 
-                    let mut adapters = instance.enumerate_adapters(backends);
+                    let mut adapters = instance.enumerate_adapters(backends).await;
                     adapters.retain(|a| !is_software_adapter(&a.get_info()));
                     adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
 
@@ -173,7 +173,7 @@ impl GpuRunner {
                             ..Default::default()
                         });
 
-                        let mut adapters = instance.enumerate_adapters(backends);
+                        let mut adapters = instance.enumerate_adapters(backends).await;
                         adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
 
                         if let Some(adapter) = adapters.into_iter().next() {
@@ -192,7 +192,7 @@ impl GpuRunner {
                     ..Default::default()
                 });
 
-                let mut adapters = instance.enumerate_adapters(backends);
+                let mut adapters = instance.enumerate_adapters(backends).await;
                 if adapters.is_empty() {
                     anyhow::bail!("Backend {} not available on this system", backend.name());
                 }
@@ -224,8 +224,9 @@ impl GpuRunner {
                         ..wgpu::Limits::default()
                     },
                     memory_hints: wgpu::MemoryHints::Performance,
+                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                    trace: wgpu::Trace::Off,
                 },
-                None,
             )
             .await
             .context("Failed to create GPU device")?;
@@ -304,7 +305,7 @@ impl GpuRunner {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         eprintln!("Creating init pipeline...");
@@ -485,7 +486,7 @@ impl GpuRunner {
             cpass.dispatch_workgroups(workgroups, 1, 1);
         }
         queue.submit(Some(encoder.finish()));
-        device.poll(wgpu::Maintain::Wait);
+        device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| anyhow::anyhow!("Device poll failed during init: {e:?}"))?;
         eprintln!("Initialization complete.");
 
         Ok(Self {
@@ -573,7 +574,7 @@ impl GpuRunner {
         let frame = &self.frames[frame_index];
 
         loop {
-            self.device.poll(wgpu::Maintain::Poll);
+            self.device.poll(wgpu::PollType::Poll).map_err(|e| anyhow::anyhow!("Device poll failed: {e:?}"))?;
 
             let mut guard = frame.receiver.lock().unwrap();
             if let Some(rx) = guard.as_mut() {
@@ -710,7 +711,7 @@ impl GpuRunner {
         let frame = &self.frames[frame_index];
 
         loop {
-            self.device.poll(wgpu::Maintain::Poll);
+            self.device.poll(wgpu::PollType::Poll).map_err(|e| anyhow::anyhow!("Device poll failed: {e:?}"))?;
 
             let mut guard = frame.receiver.lock().unwrap();
             if let Some(rx) = guard.as_mut() {
@@ -1357,9 +1358,13 @@ mod tests {
             vendor: 0,
             device: 0,
             device_type,
+            device_pci_bus_id: String::new(),
             driver: String::new(),
             driver_info: String::new(),
             backend: wgpu::Backend::Vulkan,
+            subgroup_min_size: 4,
+            subgroup_max_size: 64,
+            transient_saves_memory: false,
         }
     }
 
