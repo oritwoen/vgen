@@ -7,10 +7,6 @@
 
 Bitcoin vanity address generator with regex pattern matching and GPU acceleration.
 
-## Community
-
-- [Bitcointalk](https://bitcointalk.org/index.php?topic=5575148) - Discussion thread
-
 > [!WARNING]
 > This project is experimental. Do not use generated keys for storing real funds without thorough verification. Always prefer hardware wallets or well-established software for production use.
 
