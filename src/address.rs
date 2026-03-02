@@ -34,6 +34,28 @@ impl AddressFormat {
             AddressFormat::Ethereum,
         ]
     }
+
+    /// Returns the character encoding name used by this address format.
+    pub fn charset_name(&self) -> &'static str {
+        match self {
+            AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed | AddressFormat::P2shP2wpkh => "Base58",
+            AddressFormat::P2wpkh | AddressFormat::P2tr => "Bech32",
+            AddressFormat::Ethereum => "Hex",
+        }
+    }
+}
+
+impl std::fmt::Display for AddressFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddressFormat::P2pkh => write!(f, "P2PKH"),
+            AddressFormat::P2pkhUncompressed => write!(f, "P2PKH (Uncompressed)"),
+            AddressFormat::P2wpkh => write!(f, "P2WPKH"),
+            AddressFormat::P2shP2wpkh => write!(f, "P2SH-P2WPKH"),
+            AddressFormat::P2tr => write!(f, "P2TR"),
+            AddressFormat::Ethereum => write!(f, "Ethereum"),
+        }
+    }
 }
 
 /// A generated address with its private key.
@@ -233,5 +255,25 @@ mod tests {
         let result = gen.generate(&secret).unwrap();
         assert!(result.address.starts_with("0x"));
         assert_eq!(result.address.len(), 42);
+    }
+
+    #[test]
+    fn test_display_format() {
+        assert_eq!(AddressFormat::P2pkh.to_string(), "P2PKH");
+        assert_eq!(AddressFormat::P2wpkh.to_string(), "P2WPKH");
+        assert_eq!(AddressFormat::P2shP2wpkh.to_string(), "P2SH-P2WPKH");
+        assert_eq!(AddressFormat::P2tr.to_string(), "P2TR");
+        assert_eq!(AddressFormat::P2pkhUncompressed.to_string(), "P2PKH (Uncompressed)");
+        assert_eq!(AddressFormat::Ethereum.to_string(), "Ethereum");
+    }
+
+    #[test]
+    fn test_charset_name() {
+        assert_eq!(AddressFormat::P2pkh.charset_name(), "Base58");
+        assert_eq!(AddressFormat::P2pkhUncompressed.charset_name(), "Base58");
+        assert_eq!(AddressFormat::P2shP2wpkh.charset_name(), "Base58");
+        assert_eq!(AddressFormat::P2wpkh.charset_name(), "Bech32");
+        assert_eq!(AddressFormat::P2tr.charset_name(), "Bech32");
+        assert_eq!(AddressFormat::Ethereum.charset_name(), "Hex");
     }
 }

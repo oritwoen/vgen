@@ -614,13 +614,7 @@ fn run_search(
     // Validate charset - warn about impossible patterns
     let invalid_chars = pat.validate_charset(config.format);
     if !invalid_chars.is_empty() {
-        let format_name = match config.format {
-            AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed | AddressFormat::P2shP2wpkh => {
-                "Base58"
-            }
-            AddressFormat::P2wpkh | AddressFormat::P2tr => "Bech32",
-            AddressFormat::Ethereum => "Hex",
-        };
+        let format_name = config.format.charset_name();
         let chars_str: String = invalid_chars.iter().collect();
         eprintln!(
             "Warning: Pattern contains characters not valid in {} addresses: '{}'",
@@ -798,14 +792,7 @@ fn run_search(
             address: addr.address.clone(),
             wif: addr.wif.clone(),
             private_key_hex: addr.hex.clone(),
-            format: match config.format {
-                AddressFormat::P2pkh => "P2PKH".to_string(),
-                AddressFormat::P2wpkh => "P2WPKH".to_string(),
-                AddressFormat::P2pkhUncompressed => "P2PKH (Uncompressed)".to_string(),
-                AddressFormat::P2shP2wpkh => "P2SH-P2WPKH".to_string(),
-                AddressFormat::P2tr => "P2TR".to_string(),
-                AddressFormat::Ethereum => "Ethereum".to_string(),
-            },
+            format: config.format.to_string(),
             pattern: pattern.to_string(),
 
             operations: result.operations,
@@ -993,15 +980,7 @@ fn run_tui(
 ) -> Result<()> {
     let pat = Pattern::new(pattern, ignore_case).context("Failed to compile pattern")?;
     let pattern_owned = pattern.to_string();
-    let format_label = match config.format {
-        AddressFormat::P2pkh => "P2PKH",
-        AddressFormat::P2wpkh => "P2WPKH",
-        AddressFormat::P2pkhUncompressed => "P2PKH (Uncompressed)",
-        AddressFormat::P2shP2wpkh => "P2SH-P2WPKH",
-        AddressFormat::P2tr => "P2TR",
-        AddressFormat::Ethereum => "Ethereum",
-    }
-    .to_string();
+    let format_label = config.format.to_string();
 
     let gpu_enabled = gpu_runner.is_some();
 
