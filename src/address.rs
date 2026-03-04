@@ -122,7 +122,7 @@ impl AddressGenerator {
                 let address = match self.format {
                     AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed => {
                         let public_key = private_key.public_key(&self.secp);
-                        Address::p2pkh(&public_key, self.network)
+                        Address::p2pkh(public_key, self.network)
                     }
                     AddressFormat::P2wpkh => {
                         let public_key =
@@ -156,7 +156,7 @@ impl AddressGenerator {
     /// Helper: Generate P2PKH from compressed public key bytes.
     pub fn p2pkh_from_public_key_bytes(bytes: &[u8; 33]) -> Result<String> {
         let pubkey = PublicKey::from_slice(bytes)?;
-        Ok(Address::p2pkh(&pubkey, Network::Bitcoin).to_string())
+        Ok(Address::p2pkh(pubkey, Network::Bitcoin).to_string())
     }
 
     /// Helper: Generate P2WPKH from compressed public key bytes.

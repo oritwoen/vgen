@@ -482,7 +482,7 @@ impl GpuRunner {
             });
             cpass.set_pipeline(&init_pipeline);
             cpass.set_bind_group(0, &frames[0].bind_group, &[]);
-            let workgroups = (batch_size + 255) / 256;
+            let workgroups = batch_size.div_ceil(256);
             cpass.dispatch_workgroups(workgroups, 1, 1);
         }
         queue.submit(Some(encoder.finish()));
@@ -545,7 +545,7 @@ impl GpuRunner {
             });
             cpass.set_pipeline(&self.pipeline);
             cpass.set_bind_group(0, &frame.bind_group, &[]);
-            let workgroups = (self.batch_size + 255) / 256;
+            let workgroups = self.batch_size.div_ceil(256);
             cpass.dispatch_workgroups(workgroups, 1, 1);
         }
 
@@ -576,25 +576,35 @@ impl GpuRunner {
         loop {
             self.device.poll(wgpu::PollType::Poll).map_err(|e| anyhow::anyhow!("Device poll failed: {e:?}"))?;
 
-            let mut guard = frame.receiver.lock().unwrap();
-            if let Some(rx) = guard.as_mut() {
-                match rx.try_recv() {
-                    Ok(res) => {
-                        res?;
-                        *guard = None;
-                        break;
-                    }
-                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
-                        drop(guard);
-                        tokio::task::yield_now().await;
-                        continue;
-                    }
-                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                        anyhow::bail!("Sender dropped");
-                    }
+            let status = {
+                let mut guard = frame.receiver.lock().unwrap();
+                match guard.as_mut() {
+                    Some(rx) => match rx.try_recv() {
+                        Ok(res) => {
+                            *guard = None;
+                            Some(Ok(res))
+                        }
+                        Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
+                        Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                            Some(Err(anyhow::anyhow!("Sender dropped")))
+                        }
+                    },
+                    None => Some(Err(anyhow::anyhow!(
+                        "No pending operation on frame {}",
+                        frame_index
+                    ))),
                 }
-            } else {
-                anyhow::bail!("No pending operation on frame {}", frame_index);
+            };
+
+            match status {
+                Some(Ok(res)) => {
+                    res?;
+                    break;
+                }
+                Some(Err(e)) => return Err(e),
+                None => {
+                    tokio::task::yield_now().await;
+                }
             }
         }
 
@@ -660,7 +670,7 @@ impl GpuRunner {
                 label: Some("P2TR Search Encoder"),
             });
 
-        let workgroups = (self.batch_size + 255) / 256;
+        let workgroups = self.batch_size.div_ceil(256);
 
         // Step 1: Compute Jacobian points (no normalization)
         {
@@ -713,25 +723,35 @@ impl GpuRunner {
         loop {
             self.device.poll(wgpu::PollType::Poll).map_err(|e| anyhow::anyhow!("Device poll failed: {e:?}"))?;
 
-            let mut guard = frame.receiver.lock().unwrap();
-            if let Some(rx) = guard.as_mut() {
-                match rx.try_recv() {
-                    Ok(res) => {
-                        res?;
-                        *guard = None;
-                        break;
-                    }
-                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
-                        drop(guard);
-                        tokio::task::yield_now().await;
-                        continue;
-                    }
-                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                        anyhow::bail!("Sender dropped");
-                    }
+            let status = {
+                let mut guard = frame.receiver.lock().unwrap();
+                match guard.as_mut() {
+                    Some(rx) => match rx.try_recv() {
+                        Ok(res) => {
+                            *guard = None;
+                            Some(Ok(res))
+                        }
+                        Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
+                        Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                            Some(Err(anyhow::anyhow!("Sender dropped")))
+                        }
+                    },
+                    None => Some(Err(anyhow::anyhow!(
+                        "No pending operation on frame {}",
+                        frame_index
+                    ))),
                 }
-            } else {
-                anyhow::bail!("No pending operation on frame {}", frame_index);
+            };
+
+            match status {
+                Some(Ok(res)) => {
+                    res?;
+                    break;
+                }
+                Some(Err(e)) => return Err(e),
+                None => {
+                    tokio::task::yield_now().await;
+                }
             }
         }
 
@@ -791,7 +811,7 @@ impl GpuRunner {
                 label: Some("Batch Hash Search Encoder"),
             });
 
-        let workgroups = (self.batch_size + 255) / 256;
+        let workgroups = self.batch_size.div_ceil(256);
 
         // Step 1: Compute Jacobian points
         {
@@ -845,10 +865,10 @@ fn key_to_affine(key: [u8; 32]) -> Result<([u32; 8], [u32; 8])> {
 
     fn bytes_be_to_u32_le(bytes: &[u8]) -> [u32; 8] {
         let mut limbs = [0u32; 8];
-        for i in 0..8 {
+        for (i, limb) in limbs.iter_mut().enumerate() {
             let start = 28 - i * 4;
             let chunk: [u8; 4] = bytes[start..start + 4].try_into().unwrap();
-            limbs[i] = u32::from_be_bytes(chunk);
+            *limb = u32::from_be_bytes(chunk);
         }
         limbs
     }
@@ -893,7 +913,7 @@ pub async fn scan_gpu_with_runner(
         }
     };
 
-    let end_key_bytes = config.end.as_ref().map(|e| biguint_to_bytes32(e));
+    let end_key_bytes = config.end.as_ref().map(biguint_to_bytes32);
     let matches_mutex: Arc<Mutex<Vec<GeneratedAddress>>> = Arc::new(Mutex::new(Vec::new()));
     let found = Arc::new(AtomicUsize::new(0));
 
@@ -1136,7 +1156,7 @@ pub async fn scan_gpu_p2tr_with_runner(
         }
     };
 
-    let end_key_bytes = config.end.as_ref().map(|e| biguint_to_bytes32(e));
+    let end_key_bytes = config.end.as_ref().map(biguint_to_bytes32);
     let matches_mutex: Arc<Mutex<Vec<GeneratedAddress>>> = Arc::new(Mutex::new(Vec::new()));
     let found = Arc::new(AtomicUsize::new(0));
 

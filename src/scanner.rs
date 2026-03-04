@@ -238,7 +238,7 @@ fn scan_range_cpu(
     };
 
     let batch_size = 10_000u64;
-    let num_batches = (total_keys_u64 + batch_size - 1) / batch_size;
+    let num_batches = total_keys_u64.div_ceil(batch_size);
 
     let scan_loop = || {
         (0..num_batches).into_par_iter().for_each(|batch_idx| {

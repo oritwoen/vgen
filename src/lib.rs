@@ -394,7 +394,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             let private_key = PrivateKey::new(secret_key, Network::Bitcoin);
             let public_key = PublicKey::from_private_key(&secp, &private_key);
 
-            let p2pkh_addr = Address::p2pkh(&public_key, Network::Bitcoin);
+            let p2pkh_addr = Address::p2pkh(public_key, Network::Bitcoin);
             let p2wpkh_addr = CompressedPublicKey::try_from(public_key)
                 .ok()
                 .map(|cpk| Address::p2wpkh(&cpk, Network::Bitcoin));
@@ -572,7 +572,7 @@ fn resolve_range_params(
 
 fn parse_explicit_range(range: Option<String>, puzzle: Option<u32>) -> Result<(BigUint, BigUint)> {
     if let Some(p) = puzzle {
-        if p < 1 || p > 160 {
+        if !(1..=160).contains(&p) {
             anyhow::bail!("Puzzle number must be between 1 and 160");
         }
         let start = BigUint::one() << (p - 1);
@@ -594,6 +594,7 @@ fn parse_explicit_range(range: Option<String>, puzzle: Option<u32>) -> Result<(B
 }
 
 // Unified search runner
+#[allow(clippy::too_many_arguments)]
 fn run_search(
     pattern: &str,
     ignore_case: bool,
@@ -669,7 +670,7 @@ fn run_search(
 
     // TUI path
     if use_tui {
-        let tui_result = run_tui(&pattern, ignore_case, config.clone(), gpu_runner.clone());
+        let tui_result = run_tui(pattern, ignore_case, config.clone(), gpu_runner.clone());
         match tui_result {
             Ok(_) => return Ok(()),
             Err(e) => {
@@ -854,12 +855,14 @@ fn run_search(
         }
     }
 
-    if file.is_some() && !result.matches.is_empty() && !quiet {
-        eprintln!(
-            "Wrote {} result(s) to {:?}",
-            result.matches.len(),
-            file.as_ref().unwrap()
-        );
+    if let Some(f) = file.as_ref() {
+        if !result.matches.is_empty() && !quiet {
+            eprintln!(
+                "Wrote {} result(s) to {:?}",
+                result.matches.len(),
+                f
+            );
+        }
     }
 
     if result.matches.is_empty() && !quiet {
@@ -953,7 +956,7 @@ fn format_with_commas(n: u64) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, &b) in bytes.iter().enumerate() {
-        if i != 0 && (bytes.len() - i) % 3 == 0 {
+        if i != 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(b as char);
