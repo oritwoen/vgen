@@ -114,8 +114,13 @@ enum Commands {
     /// Estimate difficulty of a pattern (dry run)
     Estimate {
         /// Regex pattern to analyze
+        /// Or data provider reference (e.g., "boha:b1000:66")
         #[arg(short, long)]
         pattern: String,
+
+        /// When pattern is a data provider, use first N characters of address as prefix
+        #[arg(short = 'l', long)]
+        prefix_length: Option<usize>,
 
         /// Address format
         #[arg(short, long, default_value = "p2pkh")]
@@ -338,11 +343,15 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
 
         Commands::Estimate {
             pattern,
+            prefix_length,
             format,
             ignore_case,
         } => {
-            let addr_format: AddressFormat = format.into();
-            let pat = Pattern::new(&pattern, ignore_case).context("Failed to compile pattern")?;
+            let (resolved_pattern, addr_format) =
+                resolve_pattern_and_format(&pattern, prefix_length, format.into())?;
+
+            let pat = Pattern::new(&resolved_pattern, ignore_case)
+                .context("Failed to compile pattern")?;
 
             let difficulty = pat.estimate_difficulty(addr_format);
 
@@ -352,16 +361,8 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
 
             let expected_secs = difficulty as f64 / rate;
 
-            println!("Pattern: {}", pattern);
-            println!(
-                "Format: {}",
-                match format {
-                    Format::P2pkh => "P2PKH (1...)",
-                    Format::P2wpkh => "P2WPKH (bc1q...)",
-                    Format::P2tr => "P2TR (bc1p...)",
-                    Format::Ethereum => "Ethereum (0x...)",
-                }
-            );
+            println!("Pattern: {}", resolved_pattern);
+            println!("Format: {}", addr_format);
             println!("Case insensitive: {}", ignore_case);
             println!();
             println!("Estimated difficulty: 1 in {}", difficulty);
