@@ -70,11 +70,16 @@ impl Pattern {
 
             match c {
                 '\\' => escaped = true,
-                '[' => in_class = true,
-                ']' => in_class = false,
-                // Skip regex metacharacters
-                '^' | '$' | '.' | '*' | '+' | '?' | '(' | ')' | '{' | '}' | '|' | '-' => {}
-                _ if c.is_alphanumeric() && !in_class => {
+                '[' => {
+                    in_class = true;
+                }
+                ']' => {
+                    in_class = false;
+                }
+                // Skip regex metacharacters (and '-' inside character classes)
+                '^' | '$' | '.' | '*' | '+' | '?' | '(' | ')' | '{' | '}' | '|' => {}
+                '-' if in_class => {}
+                _ if c.is_alphanumeric() => {
                     // For case insensitive, check both cases
                     let char_valid = if self.case_insensitive {
                         valid_chars.contains(c.to_ascii_lowercase())
@@ -438,5 +443,31 @@ mod tests {
         assert!(invalid.contains(&'g'));
         assert!(invalid.contains(&'h'));
         assert!(invalid.contains(&'i'));
+    }
+
+    #[test]
+    fn test_validate_charset_inside_character_class() {
+        // Characters inside [...] should also be validated
+        let pat = Pattern::new("^1[0OIl]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert!(invalid.contains(&'0'));
+        assert!(invalid.contains(&'O'));
+        assert!(invalid.contains(&'I'));
+        assert!(invalid.contains(&'l'));
+    }
+
+    #[test]
+    fn test_validate_charset_class_with_valid_chars() {
+        let pat = Pattern::new("^1[Aa]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert!(invalid.is_empty());
+    }
+
+    #[test]
+    fn test_validate_charset_class_range_dash_ignored() {
+        // The '-' in [a-z] should not be flagged
+        let pat = Pattern::new("^1[a-z]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert!(invalid.is_empty());
     }
 }
