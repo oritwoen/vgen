@@ -956,7 +956,7 @@ fn format_duration(secs: f64) -> String {
 /// Fields containing commas, double quotes, or newlines are wrapped in
 /// double quotes with internal quotes doubled.
 fn csv_escape(field: &str) -> String {
-    if field.contains(',') || field.contains('"') || field.contains('\n') {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
         let mut out = String::with_capacity(field.len() + 2);
         out.push('"');
         for c in field.chars() {
