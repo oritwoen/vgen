@@ -416,7 +416,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             let mut hasher = Keccak256::new();
             hasher.update(&uncompressed[1..]); // Drop 0x04
             let hash = hasher.finalize();
-            let eth_addr = format!("0x{}", hex::encode(&hash[12..]));
+            let eth_addr = address::to_checksum_address(&hex::encode(&hash[12..]));
 
             let wif_str = if is_wif {
                 key.clone()
