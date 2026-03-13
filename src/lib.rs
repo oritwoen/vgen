@@ -839,11 +839,11 @@ fn run_search(
                 writeln!(
                     writer,
                     "{},{},{},{},{},{},{},{}",
-                    vanity_result.address,
-                    vanity_result.wif,
-                    vanity_result.private_key_hex,
-                    vanity_result.format,
-                    vanity_result.pattern,
+                    csv_escape(&vanity_result.address),
+                    csv_escape(&vanity_result.wif),
+                    csv_escape(&vanity_result.private_key_hex),
+                    csv_escape(&vanity_result.format),
+                    csv_escape(&vanity_result.pattern),
                     vanity_result.operations,
                     vanity_result.elapsed_secs,
                     vanity_result.rate
@@ -948,6 +948,27 @@ fn format_duration(secs: f64) -> String {
         format!("{:.1}d", secs / 86400.0)
     } else {
         format!("{:.1}y", secs / 31536000.0)
+    }
+}
+
+/// Escape a field for RFC 4180 CSV output.
+///
+/// Fields containing commas, double quotes, or newlines are wrapped in
+/// double quotes with internal quotes doubled.
+fn csv_escape(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') {
+        let mut out = String::with_capacity(field.len() + 2);
+        out.push('"');
+        for c in field.chars() {
+            if c == '"' {
+                out.push('"');
+            }
+            out.push(c);
+        }
+        out.push('"');
+        out
+    } else {
+        field.to_string()
     }
 }
 
@@ -1425,4 +1446,29 @@ fn run_tui(
     )?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_csv_escape_plain() {
+        assert_eq!(csv_escape("hello"), "hello");
+    }
+
+    #[test]
+    fn test_csv_escape_comma() {
+        assert_eq!(csv_escape("[a-f]{1,2}"), "\"[a-f]{1,2}\"");
+    }
+
+    #[test]
+    fn test_csv_escape_quotes() {
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
+
+    #[test]
+    fn test_csv_escape_newline() {
+        assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+    }
 }
