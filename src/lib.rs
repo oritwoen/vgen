@@ -371,9 +371,12 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
         }
 
         Commands::Verify { key, address } => {
-            use bitcoin::key::Secp256k1;
+            use bitcoin::key::{Keypair, Secp256k1, UntweakedPublicKey};
             use bitcoin::secp256k1::SecretKey;
-            use bitcoin::{Address, CompressedPublicKey, Network, PrivateKey, PublicKey};
+            use bitcoin::{
+                Address, CompressedPublicKey, Network, PrivateKey, PublicKey, ScriptBuf,
+            };
+            use sha3::{Digest, Keccak256};
 
             let secp = Secp256k1::new();
 
@@ -395,9 +398,25 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             let public_key = PublicKey::from_private_key(&secp, &private_key);
 
             let p2pkh_addr = Address::p2pkh(public_key, Network::Bitcoin);
-            let p2wpkh_addr = CompressedPublicKey::try_from(public_key)
-                .ok()
-                .map(|cpk| Address::p2wpkh(&cpk, Network::Bitcoin));
+
+            let compressed = CompressedPublicKey::try_from(public_key).ok();
+            let p2wpkh_addr = compressed.map(|cpk| Address::p2wpkh(&cpk, Network::Bitcoin));
+
+            let p2sh_p2wpkh_addr = compressed.and_then(|cpk| {
+                let script = ScriptBuf::new_p2wpkh(&cpk.wpubkey_hash());
+                Address::p2sh(&script, Network::Bitcoin).ok()
+            });
+
+            let keypair = Keypair::from_secret_key(&secp, &secret_key);
+            let (internal_key, _) = UntweakedPublicKey::from_keypair(&keypair);
+            let p2tr_addr = Address::p2tr(&secp, internal_key, None, Network::Bitcoin);
+
+            // Ethereum
+            let uncompressed = secret_key.public_key(&secp).serialize_uncompressed();
+            let mut hasher = Keccak256::new();
+            hasher.update(&uncompressed[1..]); // Drop 0x04
+            let hash = hasher.finalize();
+            let eth_addr = address::to_checksum_address(&hex::encode(&hash[12..]));
 
             let wif_str = if is_wif {
                 key.clone()
@@ -407,22 +426,36 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             println!("Private key: {}", wif_str);
             println!("Hex: {}", hex::encode(secret_key.secret_bytes()));
             println!();
-            println!("P2PKH address:  {}", p2pkh_addr);
+            println!("P2PKH address:      {}", p2pkh_addr);
             if let Some(ref addr) = p2wpkh_addr {
-                println!("P2WPKH address: {}", addr);
+                println!("P2WPKH address:     {}", addr);
             }
+            if let Some(ref addr) = p2sh_p2wpkh_addr {
+                println!("P2SH-P2WPKH addr:  {}", addr);
+            }
+            println!("P2TR address:       {}", p2tr_addr);
+            println!("Ethereum address:   {}", eth_addr);
 
             if let Some(expected) = address {
-                let p2pkh_match = p2pkh_addr.to_string() == expected;
-                let p2wpkh_match = p2wpkh_addr
-                    .as_ref()
-                    .map(|a| a.to_string() == expected)
-                    .unwrap_or(false);
+                let all_addrs = [
+                    p2pkh_addr.to_string(),
+                    p2wpkh_addr.map(|a| a.to_string()).unwrap_or_default(),
+                    p2sh_p2wpkh_addr.map(|a| a.to_string()).unwrap_or_default(),
+                    p2tr_addr.to_string(),
+                    eth_addr.clone(),
+                ];
 
-                if p2pkh_match || p2wpkh_match {
+                if all_addrs.contains(&expected) {
                     println!("\nMATCH!");
                 } else {
-                    println!("\nMISMATCH! Expected: {}", expected);
+                    // Also try case-insensitive for Ethereum
+                    if expected.starts_with("0x")
+                        && eth_addr.to_lowercase() == expected.to_lowercase()
+                    {
+                        println!("\nMATCH! (Ethereum, case-insensitive)");
+                    } else {
+                        println!("\nMISMATCH! Expected: {}", expected);
+                    }
                 }
             }
             Ok(())
