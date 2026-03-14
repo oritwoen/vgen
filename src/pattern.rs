@@ -120,7 +120,12 @@ impl Pattern {
                 }
                 '-' if in_class => {
                     class_start = false;
-                    pending_range = true;
+                    // Only treat as range if there's a preceding char to start from
+                    if prev_char.is_some() {
+                        pending_range = true;
+                    }
+                    // Leading hyphen (no prev_char) is literal - not alphanumeric,
+                    // never in any address charset, safe to ignore
                 }
                 _ if c.is_alphanumeric() => {
                     class_start = false;
@@ -135,12 +140,16 @@ impl Pattern {
                                         class_chars.push(ch);
                                     }
                                 }
+                            } else {
+                                // Shouldn't happen (leading hyphen guard above),
+                                // but add the char if it does
+                                if !class_chars.contains(&c) {
+                                    class_chars.push(c);
+                                }
                             }
                             pending_range = false;
-                        } else {
-                            if !class_chars.contains(&c) {
-                                class_chars.push(c);
-                            }
+                        } else if !class_chars.contains(&c) {
+                            class_chars.push(c);
                         }
                         prev_char = Some(c);
                     } else if !is_valid(c) && !invalid.contains(&c) {
@@ -562,9 +571,33 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_charset_range_all_invalid() {
-        // [0-0] only contains '0' which is invalid in Base58
+    fn test_validate_charset_class_single_invalid() {
+        // [0] is a single-char class, '0' is invalid in Base58
         let pat = Pattern::new("^1[0]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert_eq!(invalid, vec!['0']);
+    }
+
+    #[test]
+    fn test_validate_charset_leading_hyphen() {
+        // [-A] has leading literal hyphen and 'A' (valid Base58) - satisfiable
+        let pat = Pattern::new("^1[-A]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert!(invalid.is_empty());
+    }
+
+    #[test]
+    fn test_validate_charset_trailing_hyphen() {
+        // [A-] has trailing literal hyphen and 'A' (valid Base58) - satisfiable
+        let pat = Pattern::new("^1[A-]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert!(invalid.is_empty());
+    }
+
+    #[test]
+    fn test_validate_charset_leading_hyphen_all_invalid() {
+        // [-0] has leading hyphen and '0' (invalid Base58) - class unmatchable
+        let pat = Pattern::new("^1[-0]", false).unwrap();
         let invalid = pat.validate_charset(AddressFormat::P2pkh);
         assert_eq!(invalid, vec!['0']);
     }
