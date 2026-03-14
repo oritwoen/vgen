@@ -61,10 +61,20 @@ impl Pattern {
         let mut invalid = Vec::new();
         let mut in_class = false;
         let mut class_negated = false;
-        let mut class_has_valid = false;
-        let mut class_invalid_chars: Vec<char> = Vec::new();
+        let mut class_chars: Vec<char> = Vec::new();
         let mut class_start = false;
         let mut escaped = false;
+        let mut prev_char: Option<char> = None;
+        let mut pending_range = false;
+
+        let is_valid = |c: char| -> bool {
+            if self.case_insensitive {
+                valid_chars.contains(c.to_ascii_lowercase())
+                    || valid_chars.contains(c.to_ascii_uppercase())
+            } else {
+                valid_chars.contains(c)
+            }
+        };
 
         for c in self.original.chars() {
             if escaped {
@@ -78,48 +88,62 @@ impl Pattern {
                     in_class = true;
                     class_start = true;
                     class_negated = false;
-                    class_has_valid = false;
-                    class_invalid_chars.clear();
+                    class_chars.clear();
+                    prev_char = None;
+                    pending_range = false;
                 }
                 ']' if in_class => {
                     // A negated class [^...] matches anything NOT listed,
                     // so it's almost always satisfiable - don't flag it.
                     // For normal classes, only report if ALL members are invalid.
-                    if !class_negated && !class_has_valid {
-                        for &ic in &class_invalid_chars {
-                            if !invalid.contains(&ic) {
-                                invalid.push(ic);
+                    if !class_negated {
+                        let has_valid = class_chars.iter().any(|&ch| is_valid(ch));
+                        if !has_valid {
+                            for &ic in &class_chars {
+                                if ic.is_alphanumeric() && !invalid.contains(&ic) {
+                                    invalid.push(ic);
+                                }
                             }
                         }
                     }
                     in_class = false;
+                    prev_char = None;
+                    pending_range = false;
                 }
                 '^' if in_class && class_start => {
                     class_negated = true;
                     class_start = false;
                 }
-                // Skip regex metacharacters (and '-' inside character classes)
+                // Skip regex metacharacters
                 '^' | '$' | '.' | '*' | '+' | '?' | '(' | ')' | '{' | '}' | '|' => {
                     class_start = false;
                 }
                 '-' if in_class => {
                     class_start = false;
+                    pending_range = true;
                 }
                 _ if c.is_alphanumeric() => {
                     class_start = false;
-                    let char_valid = if self.case_insensitive {
-                        valid_chars.contains(c.to_ascii_lowercase())
-                            || valid_chars.contains(c.to_ascii_uppercase())
-                    } else {
-                        valid_chars.contains(c)
-                    };
                     if in_class {
-                        if char_valid {
-                            class_has_valid = true;
-                        } else if !class_invalid_chars.contains(&c) {
-                            class_invalid_chars.push(c);
+                        if pending_range {
+                            if let Some(start) = prev_char {
+                                // Expand range: add all chars from start to c
+                                let from = start.min(c);
+                                let to = start.max(c);
+                                for ch in from..=to {
+                                    if !class_chars.contains(&ch) {
+                                        class_chars.push(ch);
+                                    }
+                                }
+                            }
+                            pending_range = false;
+                        } else {
+                            if !class_chars.contains(&c) {
+                                class_chars.push(c);
+                            }
                         }
-                    } else if !char_valid && !invalid.contains(&c) {
+                        prev_char = Some(c);
+                    } else if !is_valid(c) && !invalid.contains(&c) {
                         invalid.push(c);
                     }
                 }
@@ -523,9 +547,25 @@ mod tests {
 
     #[test]
     fn test_validate_charset_class_with_range_endpoints() {
-        // [0-9] contains range endpoints - 'z' valid in Base58 makes class satisfiable
+        // [0-9] contains range endpoints - '9' valid in Base58 makes class satisfiable
         let pat = Pattern::new("^1[0-9a]", false).unwrap();
         let invalid = pat.validate_charset(AddressFormat::P2pkh);
         assert!(invalid.is_empty());
+    }
+
+    #[test]
+    fn test_validate_charset_range_expansion() {
+        // [I-O] endpoints are both invalid in Base58, but range includes valid J,K,L,M,N
+        let pat = Pattern::new("^1[I-O]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert!(invalid.is_empty());
+    }
+
+    #[test]
+    fn test_validate_charset_range_all_invalid() {
+        // [0-0] only contains '0' which is invalid in Base58
+        let pat = Pattern::new("^1[0]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert_eq!(invalid, vec!['0']);
     }
 }
