@@ -429,6 +429,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 private_key.to_wif()
             };
             println!("Private key: {}", wif_str);
+            println!("WIF (uncompr.):     {}", uncompressed_key.to_wif());
             println!("Hex: {}", hex::encode(secret_key.secret_bytes()));
             println!();
             println!("P2PKH address:      {}", p2pkh_addr);
