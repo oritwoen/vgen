@@ -87,7 +87,7 @@ vgen estimate -p "^1Cat" -f p2pkh
 | `--no-gpu` | Force CPU-only |
 | `--gpu-batch-size` | GPU batch size (default: 524288) |
 | `--backend` | `auto`, `vulkan`, `metal`, `dx12`, `gl` |
-| `-i, --ignore-case` | Case insensitive (P2PKH only, generate only) |
+| `-i, --ignore-case` | Case insensitive (Base58 + Ethereum, generate/estimate) |
 | `-l, --prefix-length` | Use first N chars of provider address as prefix |
 | `--no-tui` | Disable interactive TUI (range only) |
 
