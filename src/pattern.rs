@@ -79,8 +79,11 @@ impl Pattern {
         for c in self.original.chars() {
             if escaped {
                 escaped = false;
-                if in_class && !class_chars.contains(&c) {
-                    class_chars.push(c);
+                if in_class {
+                    class_start = false;
+                    if !class_chars.contains(&c) {
+                        class_chars.push(c);
+                    }
                 }
                 continue;
             }
