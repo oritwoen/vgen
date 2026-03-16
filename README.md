@@ -190,6 +190,30 @@ Patterns use Rust regex syntax:
 - Interactive TUI with real-time statistics
 - Bitcoin Puzzle range scanning built-in
 
+## Agent Skills
+
+This project includes [agent skills](https://skills.sh/) that teach AI coding agents how to use vgen.
+
+### Static skills
+
+Curated by the project author:
+
+```bash
+npx skills add oritwoen/vgen
+```
+
+| Skill | Description |
+|-------|-------------|
+| `vgen` | CLI and library API for Bitcoin vanity address generation with GPU acceleration |
+
+### Dynamic skills
+
+Auto-generated from live docs, issues, and releases using [skilld](https://github.com/harlan-zw/skilld):
+
+```bash
+npx skilld add vgen
+```
+
 ## Roadmap
 
 - [ ] More cryptocurrencies (Litecoin, Dogecoin, Solana, etc.)
