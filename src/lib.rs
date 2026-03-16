@@ -465,12 +465,21 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     eth_addr.clone(),
                 ];
 
+                // Also normalize raw 40-hex Ethereum (without 0x prefix)
+                let is_raw_eth = normalized.len() == 40
+                    && normalized.chars().all(|c| c.is_ascii_hexdigit());
+                let eth_normalized = if is_raw_eth {
+                    format!("0x{}", normalized)
+                } else {
+                    normalized.clone()
+                };
+
                 if all_addrs.contains(&normalized) {
                     println!("\nMATCH!");
-                } else if normalized
+                } else if eth_normalized
                     .get(..2)
                     .is_some_and(|p| p.eq_ignore_ascii_case("0x"))
-                    && eth_addr.eq_ignore_ascii_case(&normalized)
+                    && eth_addr.eq_ignore_ascii_case(&eth_normalized)
                 {
                     println!("\nMATCH! (Ethereum, case-insensitive)");
                 } else {
