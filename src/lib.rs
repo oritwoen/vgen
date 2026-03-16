@@ -500,6 +500,9 @@ fn resolve_pattern_and_format(
 ) -> Result<(String, AddressFormat)> {
     if let Some(provider_result) = provider::resolve(pattern)? {
         let resolved = if let Some(prefix_len) = prefix_length {
+            if prefix_len == 0 {
+                anyhow::bail!("--prefix-length must be at least 1 for provider patterns");
+            }
             provider::build_pattern(&provider_result, prefix_len)
         } else {
             provider::build_exact_pattern(&provider_result)
