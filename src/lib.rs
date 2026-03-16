@@ -499,16 +499,11 @@ fn resolve_pattern_and_format(
     default_format: AddressFormat,
 ) -> Result<(String, AddressFormat)> {
     if let Some(provider_result) = provider::resolve(pattern)? {
-        let prefix_len = prefix_length.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Provider pattern '{}' requires --prefix-length (-l) to specify how many \
-                 characters of address '{}' to match",
-                pattern,
-                provider_result.address
-            )
-        })?;
-
-        let resolved = provider::build_pattern(&provider_result, prefix_len);
+        let resolved = if let Some(prefix_len) = prefix_length {
+            provider::build_pattern(&provider_result, prefix_len)
+        } else {
+            provider::build_exact_pattern(&provider_result)
+        };
 
         eprintln!(
             "Provider: {} → {} → pattern '{}'",
