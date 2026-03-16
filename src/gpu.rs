@@ -228,17 +228,35 @@ impl GpuRunner {
             .await
             .context("Failed to create GPU device")?;
 
-        eprintln!("Compiling shader...");
-        let mut source = String::new();
-        source.push_str(include_str!("shaders/sha256.wgsl"));
-        source.push('\n');
-        source.push_str(include_str!("shaders/ripemd160.wgsl"));
-        source.push('\n');
-        source.push_str(include_str!("shaders/generator.wgsl"));
+        eprintln!("Compiling shaders...");
+        let field_source = include_str!("shaders/field.wgsl");
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Vanity Gen Shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(source)),
+        let mut init_source = String::from(field_source);
+        init_source.push('\n');
+        init_source.push_str(include_str!("shaders/init.wgsl"));
+        let init_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Init Shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(init_source)),
+        });
+
+        let mut search_source = String::from(field_source);
+        search_source.push('\n');
+        search_source.push_str(include_str!("shaders/sha256.wgsl"));
+        search_source.push('\n');
+        search_source.push_str(include_str!("shaders/ripemd160.wgsl"));
+        search_source.push('\n');
+        search_source.push_str(include_str!("shaders/search.wgsl"));
+        let search_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Search Shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(search_source)),
+        });
+
+        let mut p2tr_source = String::from(field_source);
+        p2tr_source.push('\n');
+        p2tr_source.push_str(include_str!("shaders/search_p2tr.wgsl"));
+        let p2tr_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("P2TR Shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(p2tr_source)),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -309,7 +327,7 @@ impl GpuRunner {
         let init_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Init Pipeline"),
             layout: Some(&pipeline_layout),
-            module: &shader,
+            module: &init_shader,
             entry_point: Some("init_table"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
@@ -319,7 +337,7 @@ impl GpuRunner {
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Search Pipeline"),
             layout: Some(&pipeline_layout),
-            module: &shader,
+            module: &search_shader,
             entry_point: Some("main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
@@ -331,7 +349,7 @@ impl GpuRunner {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Compute Jacobian Pipeline"),
                 layout: Some(&pipeline_layout),
-                module: &shader,
+                module: &search_shader,
                 entry_point: Some("compute_jacobian"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
@@ -341,7 +359,7 @@ impl GpuRunner {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Batch Normalize Hash Pipeline"),
                 layout: Some(&pipeline_layout),
-                module: &shader,
+                module: &search_shader,
                 entry_point: Some("batch_normalize_hash"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
@@ -351,7 +369,7 @@ impl GpuRunner {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Batch Normalize P2TR Pipeline"),
                 layout: Some(&pipeline_layout),
-                module: &shader,
+                module: &p2tr_shader,
                 entry_point: Some("batch_normalize_p2tr"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
