@@ -592,6 +592,9 @@ fn resolve_range_params(
 ) -> Result<(BigUint, BigUint, String, AddressFormat)> {
     if let Some(provider_result) = provider::resolve(pattern)? {
         let resolved_pattern = if let Some(len) = prefix_length {
+            if len == 0 {
+                anyhow::bail!("--prefix-length must be at least 1 for provider patterns");
+            }
             let pat = provider::build_pattern(&provider_result, len);
             eprintln!(
                 "Provider: {} → {} → pattern '{}'",
@@ -1531,5 +1534,20 @@ mod tests {
     #[test]
     fn test_csv_escape_newline() {
         assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+    }
+
+    #[test]
+    fn test_resolve_range_params_rejects_prefix_length_zero() {
+        // Regression test for #27: --prefix-length 0 should be rejected
+        let result = resolve_range_params(
+            "boha:b1000:66",
+            Some(0),
+            AddressFormat::P2pkh,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("--prefix-length must be at least 1"));
     }
 }
