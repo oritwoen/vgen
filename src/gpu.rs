@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey, XOnlyPublicKey};
 use clap::ValueEnum;
 use num_bigint::BigUint;
 use rand::rngs::StdRng;
@@ -140,14 +140,31 @@ impl GpuRunner {
                 wgpu::DeviceType::VirtualGpu => 1,
                 wgpu::DeviceType::IntegratedGpu => 2,
                 wgpu::DeviceType::Cpu => 3,
-                _ => 4,
+                wgpu::DeviceType::Other => 4,
             }
         }
 
-        let (_instance, adapter, selected_backend) = match backend {
-            GpuBackend::Auto => {
-                let mut selected: Option<(wgpu::Instance, wgpu::Adapter, GpuBackend)> = None;
+        let (_instance, adapter, selected_backend) = if backend == GpuBackend::Auto {
+            let mut selected: Option<(wgpu::Instance, wgpu::Adapter, GpuBackend)> = None;
 
+            for &candidate in GpuBackend::fallback_order() {
+                let backends = candidate.to_wgpu_backends();
+                let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                    backends,
+                    ..Default::default()
+                });
+
+                let mut adapters = instance.enumerate_adapters(backends).await;
+                adapters.retain(|a| !is_software_adapter(&a.get_info()));
+                adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
+
+                if let Some(adapter) = adapters.into_iter().next() {
+                    selected = Some((instance, adapter, candidate));
+                    break;
+                }
+            }
+
+            if selected.is_none() {
                 for &candidate in GpuBackend::fallback_order() {
                     let backends = candidate.to_wgpu_backends();
                     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -156,7 +173,6 @@ impl GpuRunner {
                     });
 
                     let mut adapters = instance.enumerate_adapters(backends).await;
-                    adapters.retain(|a| !is_software_adapter(&a.get_info()));
                     adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
 
                     if let Some(adapter) = adapters.into_iter().next() {
@@ -164,47 +180,28 @@ impl GpuRunner {
                         break;
                     }
                 }
-
-                if selected.is_none() {
-                    for &candidate in GpuBackend::fallback_order() {
-                        let backends = candidate.to_wgpu_backends();
-                        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                            backends,
-                            ..Default::default()
-                        });
-
-                        let mut adapters = instance.enumerate_adapters(backends).await;
-                        adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
-
-                        if let Some(adapter) = adapters.into_iter().next() {
-                            selected = Some((instance, adapter, candidate));
-                            break;
-                        }
-                    }
-                }
-
-                selected.context("No GPU backends available")?
             }
-            _ => {
-                let backends = backend.to_wgpu_backends();
-                let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                    backends,
-                    ..Default::default()
-                });
 
-                let mut adapters = instance.enumerate_adapters(backends).await;
-                if adapters.is_empty() {
-                    anyhow::bail!("Backend {} not available on this system", backend.name());
-                }
+            selected.context("No GPU backends available")?
+        } else {
+            let backends = backend.to_wgpu_backends();
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                backends,
+                ..Default::default()
+            });
 
-                adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
-                let adapter = adapters
-                    .into_iter()
-                    .next()
-                    .context("Failed to select GPU adapter")?;
-
-                (instance, adapter, backend)
+            let mut adapters = instance.enumerate_adapters(backends).await;
+            if adapters.is_empty() {
+                anyhow::bail!("Backend {} not available on this system", backend.name());
             }
+
+            adapters.sort_by_key(|a| device_type_priority(a.get_info().device_type));
+            let adapter = adapters
+                .into_iter()
+                .next()
+                .context("Failed to select GPU adapter")?;
+
+            (instance, adapter, backend)
         };
 
         let adapter_info = adapter.get_info();
@@ -360,7 +357,7 @@ impl GpuRunner {
                 cache: None,
             });
 
-        let table_size = (batch_size as u64) * 64;
+        let table_size = u64::from(batch_size) * 64;
         let table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Table Buffer"),
             size: table_size,
@@ -370,9 +367,9 @@ impl GpuRunner {
 
         let num_frames = 2;
         let mut frames = Vec::with_capacity(num_frames);
-        let output_size = (batch_size as u64) * 20; // Hash160 = 20 bytes
-        let jacobian_size = (batch_size as u64) * 96; // JacobianPoint = 3 * 32 bytes
-        let p2tr_output_size = (batch_size as u64) * 32; // X coordinate = 32 bytes
+        let output_size = u64::from(batch_size) * 20; // Hash160 = 20 bytes
+        let jacobian_size = u64::from(batch_size) * 96; // JacobianPoint = 3 * 32 bytes
+        let p2tr_output_size = u64::from(batch_size) * 32; // X coordinate = 32 bytes
 
         let initial_config = Config {
             base_x: BigInt256 {
@@ -582,6 +579,7 @@ impl GpuRunner {
                     Some(rx) => match rx.try_recv() {
                         Ok(res) => {
                             *guard = None;
+                            drop(guard);
                             Some(Ok(res))
                         }
                         Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
@@ -729,6 +727,7 @@ impl GpuRunner {
                     Some(rx) => match rx.try_recv() {
                         Ok(res) => {
                             *guard = None;
+                            drop(guard);
                             Some(Ok(res))
                         }
                         Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
@@ -857,25 +856,33 @@ impl GpuRunner {
     }
 }
 
+fn bytes_be_to_u32_le(bytes: &[u8]) -> [u32; 8] {
+    let mut limbs = [0u32; 8];
+    for (i, limb) in limbs.iter_mut().enumerate() {
+        let start = 28 - i * 4;
+        let chunk: [u8; 4] = bytes[start..start + 4].try_into().unwrap();
+        *limb = u32::from_be_bytes(chunk);
+    }
+    limbs
+}
+
 fn key_to_affine(key: [u8; 32]) -> Result<([u32; 8], [u32; 8])> {
     let secp = Secp256k1::new();
     let sk = SecretKey::from_slice(&key)?;
     let pk = PublicKey::from_secret_key(&secp, &sk);
     let serialized = pk.serialize_uncompressed();
 
-    fn bytes_be_to_u32_le(bytes: &[u8]) -> [u32; 8] {
-        let mut limbs = [0u32; 8];
-        for (i, limb) in limbs.iter_mut().enumerate() {
-            let start = 28 - i * 4;
-            let chunk: [u8; 4] = bytes[start..start + 4].try_into().unwrap();
-            *limb = u32::from_be_bytes(chunk);
-        }
-        limbs
-    }
-
     let x_limbs = bytes_be_to_u32_le(&serialized[1..33]);
     let y_limbs = bytes_be_to_u32_le(&serialized[33..65]);
     Ok((x_limbs, y_limbs))
+}
+
+fn biguint_to_bytes32(n: &BigUint) -> [u8; 32] {
+    let bytes = n.to_bytes_be();
+    let mut result = [0u8; 32];
+    let start = 32usize.saturating_sub(bytes.len());
+    result[start..].copy_from_slice(&bytes[bytes.len().saturating_sub(32)..]);
+    result
 }
 
 pub async fn scan_gpu_with_runner(
@@ -890,14 +897,6 @@ pub async fn scan_gpu_with_runner(
     let batch_size = runner.batch_size;
 
     let mut total_ops = 0u64;
-
-    fn biguint_to_bytes32(n: &BigUint) -> [u8; 32] {
-        let bytes = n.to_bytes_be();
-        let mut result = [0u8; 32];
-        let start = 32usize.saturating_sub(bytes.len());
-        result[start..].copy_from_slice(&bytes[bytes.len().saturating_sub(32)..]);
-        result
-    }
 
     let mut current_key: [u8; 32] = if let Some(start) = &config.start {
         biguint_to_bytes32(start)
@@ -921,7 +920,7 @@ pub async fn scan_gpu_with_runner(
         let mut k = key;
         let mut carry = amount;
         for byte_idx in (0..32).rev() {
-            let sum = k[byte_idx] as u64 + (carry & 0xFF);
+            let sum = u64::from(k[byte_idx]) + (carry & 0xFF);
             k[byte_idx] = sum as u8;
             carry = (carry >> 8) + (sum >> 8);
             if carry == 0 {
@@ -956,7 +955,7 @@ pub async fn scan_gpu_with_runner(
         }
 
         runner.dispatch(current_key, i)?;
-        match increment_key(current_key, batch_size as u64) {
+        match increment_key(current_key, u64::from(batch_size)) {
             Some(k) => current_key = k,
             None => break, // Key space exhausted
         }
@@ -988,7 +987,7 @@ pub async fn scan_gpu_with_runner(
 
             if in_range {
                 runner.dispatch(current_key, frame)?;
-                if let Some(k) = increment_key(current_key, batch_size as u64) {
+                if let Some(k) = increment_key(current_key, u64::from(batch_size)) {
                     current_key = k;
                 }
                 in_flight += 1;
@@ -1026,9 +1025,8 @@ pub async fn scan_gpu_with_runner(
                 };
 
                 if pattern.matches(&addr_string) {
-                    let k = match increment_key(batch_start_key, i as u64) {
-                        Some(key) => key,
-                        None => return None, // Invalid key
+                    let Some(k) = increment_key(batch_start_key, i as u64) else {
+                        return None;
                     };
 
                     if let Some(end) = end_key_bytes {
@@ -1037,9 +1035,8 @@ pub async fn scan_gpu_with_runner(
                         }
                     }
 
-                    let wif = match AddressGenerator::bytes_to_wif(&k, bitcoin::Network::Bitcoin) {
-                        Some(w) => w,
-                        None => return None, // Invalid key for WIF
+                    let Some(wif) = AddressGenerator::bytes_to_wif(&k, bitcoin::Network::Bitcoin) else {
+                        return None;
                     };
                     Some(GeneratedAddress {
                         address: addr_string,
@@ -1061,9 +1058,10 @@ pub async fn scan_gpu_with_runner(
                     found.fetch_add(1, Ordering::Relaxed);
                 }
             }
+            drop(m);
         }
 
-        total_ops += batch_size as u64;
+        total_ops += u64::from(batch_size);
         if let Some(cb) = &progress_cb {
             cb(total_ops);
         }
@@ -1136,14 +1134,6 @@ pub async fn scan_gpu_p2tr_with_runner(
     let batch_size = runner.batch_size;
     let mut total_ops = 0u64;
 
-    fn biguint_to_bytes32(n: &BigUint) -> [u8; 32] {
-        let bytes = n.to_bytes_be();
-        let mut result = [0u8; 32];
-        let start = 32usize.saturating_sub(bytes.len());
-        result[start..].copy_from_slice(&bytes[bytes.len().saturating_sub(32)..]);
-        result
-    }
-
     let mut current_key: [u8; 32] = if let Some(start) = &config.start {
         biguint_to_bytes32(start)
     } else {
@@ -1164,7 +1154,7 @@ pub async fn scan_gpu_p2tr_with_runner(
         let mut k = key;
         let mut carry = amount;
         for byte_idx in (0..32).rev() {
-            let sum = k[byte_idx] as u64 + (carry & 0xFF);
+            let sum = u64::from(k[byte_idx]) + (carry & 0xFF);
             k[byte_idx] = sum as u8;
             carry = (carry >> 8) + (sum >> 8);
             if carry == 0 {
@@ -1198,7 +1188,7 @@ pub async fn scan_gpu_p2tr_with_runner(
         }
 
         runner.dispatch_p2tr(current_key, i)?;
-        match increment_key(current_key, batch_size as u64) {
+        match increment_key(current_key, u64::from(batch_size)) {
             Some(k) => current_key = k,
             None => break,
         }
@@ -1231,7 +1221,7 @@ pub async fn scan_gpu_p2tr_with_runner(
 
             if in_range {
                 runner.dispatch_p2tr(current_key, frame)?;
-                if let Some(k) = increment_key(current_key, batch_size as u64) {
+                if let Some(k) = increment_key(current_key, u64::from(batch_size)) {
                     current_key = k;
                 }
                 in_flight += 1;
@@ -1240,7 +1230,6 @@ pub async fn scan_gpu_p2tr_with_runner(
         }
 
         // Create secp256k1 context once outside the parallel iterator
-        use bitcoin::secp256k1::{Secp256k1, XOnlyPublicKey};
         let secp = Secp256k1::verification_only();
 
         let found_in_batch = x_coords
@@ -1287,9 +1276,10 @@ pub async fn scan_gpu_p2tr_with_runner(
                     found.fetch_add(1, Ordering::Relaxed);
                 }
             }
+            drop(m);
         }
 
-        total_ops += batch_size as u64;
+        total_ops += u64::from(batch_size);
         if let Some(cb) = &progress_cb {
             cb(total_ops);
         }

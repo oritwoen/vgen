@@ -207,6 +207,7 @@ pub fn scan_with_progress(
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn scan_range_cpu(
     pattern: &Pattern,
     config: &ScanConfig,

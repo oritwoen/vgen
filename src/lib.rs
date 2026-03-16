@@ -406,10 +406,10 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             let p2pkh_uncompressed_addr = Address::p2pkh(uncompressed_pubkey, Network::Bitcoin);
 
             let compressed = CompressedPublicKey::try_from(public_key).ok();
-            let p2wpkh_addr = compressed.map(|cpk| Address::p2wpkh(&cpk, Network::Bitcoin));
+            let p2wpkh_addr = compressed.map(|c| Address::p2wpkh(&c, Network::Bitcoin));
 
-            let p2sh_p2wpkh_addr = compressed.and_then(|cpk| {
-                let script = ScriptBuf::new_p2wpkh(&cpk.wpubkey_hash());
+            let p2sh_p2wpkh_addr = compressed.and_then(|c| {
+                let script = ScriptBuf::new_p2wpkh(&c.wpubkey_hash());
                 Address::p2sh(&script, Network::Bitcoin).ok()
             });
 
@@ -425,7 +425,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             let eth_addr = address::to_checksum_address(&hex::encode(&hash[12..]));
 
             let wif_str = if is_wif {
-                key.clone()
+                key
             } else {
                 private_key.to_wif()
             };
@@ -449,8 +449,8 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 let is_bech32 = expected
                     .get(..3)
                     .is_some_and(|p| p.eq_ignore_ascii_case("bc1"));
-                let is_single_case = expected.chars().filter(|c| c.is_ascii_alphabetic()).all(|c| c.is_ascii_lowercase())
-                    || expected.chars().filter(|c| c.is_ascii_alphabetic()).all(|c| c.is_ascii_uppercase());
+                let is_single_case = expected.chars().filter(char::is_ascii_alphabetic).all(|c| c.is_ascii_lowercase())
+                    || expected.chars().filter(char::is_ascii_alphabetic).all(|c| c.is_ascii_uppercase());
                 let normalized = if is_bech32 && is_single_case {
                     expected.to_lowercase()
                 } else {
@@ -654,7 +654,7 @@ fn parse_explicit_range(range: Option<String>, puzzle: Option<u32>) -> Result<(B
 }
 
 // Unified search runner
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn run_search(
     pattern: &str,
     ignore_case: bool,
@@ -732,7 +732,7 @@ fn run_search(
     if use_tui {
         let tui_result = run_tui(pattern, ignore_case, config.clone(), gpu_runner.clone());
         match tui_result {
-            Ok(_) => return Ok(()),
+            Ok(()) => return Ok(()),
             Err(e) => {
                 eprintln!("TUI failed: ({e:?}). Falling back to console output.");
             }
@@ -741,7 +741,9 @@ fn run_search(
 
     // --- NON-TUI PATH ---
 
-    let pb = if !quiet {
+    let pb = if quiet {
+        None
+    } else {
         let pb = ProgressBar::new_spinner();
         pb.set_style(
             ProgressStyle::default_spinner()
@@ -750,8 +752,6 @@ fn run_search(
         );
         pb.set_message(format!("Searching for pattern '{}'...", pattern));
         Some(pb)
-    } else {
-        None
     };
 
     let pb_clone = pb.clone();
@@ -918,9 +918,9 @@ fn run_search(
     if let Some(f) = file.as_ref() {
         if !result.matches.is_empty() && !quiet {
             eprintln!(
-                "Wrote {} result(s) to {:?}",
+                "Wrote {} result(s) to {}",
                 result.matches.len(),
-                f
+                f.display()
             );
         }
     }
@@ -1103,8 +1103,8 @@ fn run_tui(
     let stop_clone = stop.clone();
     let state_for_progress = state.clone();
     let state_for_result = state.clone();
-    let config_clone = config.clone();
-    let runner_clone = gpu_runner.clone();
+    let config_clone = config;
+    let runner_clone = gpu_runner;
 
     let mut runner_thread_opt = Some(std::thread::spawn(move || -> Result<()> {
         let start = std::time::Instant::now();
@@ -1181,25 +1181,26 @@ fn run_tui(
             .collect();
         st.done = true;
         st.tui_status_message = "Search complete.".to_string();
+        drop(st);
         Ok(())
     }));
 
     // TUI Initialization
     match enable_raw_mode() {
-        Ok(_) => {}
+        Ok(()) => {}
         Err(e) => {
             eprintln!("Failed to enable raw mode: {e:?}. Fallback to console.");
             return Err(e.into());
         }
-    };
+    }
     let mut stdout = std::io::stdout();
     match crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen) {
-        Ok(_) => {}
+        Ok(()) => {}
         Err(e) => {
             eprintln!("Failed to enter alternate screen: {e:?}. Fallback to console.");
             return Err(e.into());
         }
-    };
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 

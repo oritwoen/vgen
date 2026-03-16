@@ -92,64 +92,61 @@ impl AddressGenerator {
     pub fn generate(&self, secret: &[u8; 32]) -> Option<GeneratedAddress> {
         let secret_key = SecretKey::from_slice(secret).ok()?;
 
-        match self.format {
-            AddressFormat::Ethereum => {
-                let public_key = secret_key.public_key(&self.secp);
-                let serialized = public_key.serialize_uncompressed();
-                let pub_bytes = &serialized[1..]; // Drop 0x04
+        if self.format == AddressFormat::Ethereum {
+            let public_key = secret_key.public_key(&self.secp);
+            let serialized = public_key.serialize_uncompressed();
+            let pub_bytes = &serialized[1..]; // Drop 0x04
 
-                let mut hasher = Keccak256::new();
-                hasher.update(pub_bytes);
-                let hash = hasher.finalize();
+            let mut hasher = Keccak256::new();
+            hasher.update(pub_bytes);
+            let hash = hasher.finalize();
 
-                let address_bytes = &hash[12..];
-                let address_hex = hex::encode(address_bytes);
-                let checksum_address = to_checksum_address(&address_hex);
+            let address_bytes = &hash[12..];
+            let address_hex = hex::encode(address_bytes);
+            let checksum_address = to_checksum_address(&address_hex);
 
-                Some(GeneratedAddress {
-                    address: checksum_address,
-                    wif: hex::encode(secret),
-                    hex: hex::encode(secret),
-                    format: self.format,
-                })
-            }
-            _ => {
-                // Bitcoin formats
-                let compressed = self.format != AddressFormat::P2pkhUncompressed;
-                let mut private_key = PrivateKey::new(secret_key, self.network);
-                private_key.compressed = compressed;
+            Some(GeneratedAddress {
+                address: checksum_address,
+                wif: hex::encode(secret),
+                hex: hex::encode(secret),
+                format: self.format,
+            })
+        } else {
+            // Bitcoin formats
+            let compressed = self.format != AddressFormat::P2pkhUncompressed;
+            let mut private_key = PrivateKey::new(secret_key, self.network);
+            private_key.compressed = compressed;
 
-                let address = match self.format {
-                    AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed => {
-                        let public_key = private_key.public_key(&self.secp);
-                        Address::p2pkh(public_key, self.network)
-                    }
-                    AddressFormat::P2wpkh => {
-                        let public_key =
-                            CompressedPublicKey::from_private_key(&self.secp, &private_key).ok()?;
-                        Address::p2wpkh(&public_key, self.network)
-                    }
-                    AddressFormat::P2shP2wpkh => {
-                        let public_key =
-                            CompressedPublicKey::from_private_key(&self.secp, &private_key).ok()?;
-                        let script = ScriptBuf::new_p2wpkh(&public_key.wpubkey_hash());
-                        Address::p2sh(&script, self.network).ok()?
-                    }
-                    AddressFormat::P2tr => {
-                        let keypair = Keypair::from_secret_key(&self.secp, &secret_key);
-                        let (internal_key, _) = UntweakedPublicKey::from_keypair(&keypair);
-                        Address::p2tr(&self.secp, internal_key, None, self.network)
-                    }
-                    AddressFormat::Ethereum => unreachable!(),
-                };
+            let address = match self.format {
+                AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed => {
+                    let public_key = private_key.public_key(&self.secp);
+                    Address::p2pkh(public_key, self.network)
+                }
+                AddressFormat::P2wpkh => {
+                    let public_key =
+                        CompressedPublicKey::from_private_key(&self.secp, &private_key).ok()?;
+                    Address::p2wpkh(&public_key, self.network)
+                }
+                AddressFormat::P2shP2wpkh => {
+                    let public_key =
+                        CompressedPublicKey::from_private_key(&self.secp, &private_key).ok()?;
+                    let script = ScriptBuf::new_p2wpkh(&public_key.wpubkey_hash());
+                    Address::p2sh(&script, self.network).ok()?
+                }
+                AddressFormat::P2tr => {
+                    let keypair = Keypair::from_secret_key(&self.secp, &secret_key);
+                    let (internal_key, _) = UntweakedPublicKey::from_keypair(&keypair);
+                    Address::p2tr(&self.secp, internal_key, None, self.network)
+                }
+                AddressFormat::Ethereum => unreachable!(),
+            };
 
-                Some(GeneratedAddress {
-                    address: address.to_string(),
-                    wif: private_key.to_wif(),
-                    hex: hex::encode(secret),
-                    format: self.format,
-                })
-            }
+            Some(GeneratedAddress {
+                address: address.to_string(),
+                wif: private_key.to_wif(),
+                hex: hex::encode(secret),
+                format: self.format,
+            })
         }
     }
 
