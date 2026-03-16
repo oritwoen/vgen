@@ -399,6 +399,11 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
 
             let p2pkh_addr = Address::p2pkh(public_key, Network::Bitcoin);
 
+            let mut uncompressed_key = private_key;
+            uncompressed_key.compressed = false;
+            let uncompressed_pubkey = uncompressed_key.public_key(&secp);
+            let p2pkh_uncompressed_addr = Address::p2pkh(uncompressed_pubkey, Network::Bitcoin);
+
             let compressed = CompressedPublicKey::try_from(public_key).ok();
             let p2wpkh_addr = compressed.map(|cpk| Address::p2wpkh(&cpk, Network::Bitcoin));
 
@@ -427,6 +432,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             println!("Hex: {}", hex::encode(secret_key.secret_bytes()));
             println!();
             println!("P2PKH address:      {}", p2pkh_addr);
+            println!("P2PKH (uncompr.):   {}", p2pkh_uncompressed_addr);
             if let Some(ref addr) = p2wpkh_addr {
                 println!("P2WPKH address:     {}", addr);
             }
@@ -439,6 +445,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             if let Some(expected) = address {
                 let all_addrs = [
                     p2pkh_addr.to_string(),
+                    p2pkh_uncompressed_addr.to_string(),
                     p2wpkh_addr.map(|a| a.to_string()).unwrap_or_default(),
                     p2sh_p2wpkh_addr.map(|a| a.to_string()).unwrap_or_default(),
                     p2tr_addr.to_string(),
@@ -449,8 +456,8 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     println!("\nMATCH!");
                 } else {
                     // Also try case-insensitive for Ethereum
-                    if expected.starts_with("0x")
-                        && eth_addr.to_lowercase() == expected.to_lowercase()
+                    if expected.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("0x"))
+                        && eth_addr.eq_ignore_ascii_case(&expected)
                     {
                         println!("\nMATCH! (Ethereum, case-insensitive)");
                     } else {
