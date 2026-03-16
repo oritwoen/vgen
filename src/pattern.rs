@@ -79,6 +79,12 @@ impl Pattern {
         for c in self.original.chars() {
             if escaped {
                 escaped = false;
+                if in_class {
+                    class_start = false;
+                    if !class_chars.contains(&c) {
+                        class_chars.push(c);
+                    }
+                }
                 continue;
             }
 
@@ -100,7 +106,7 @@ impl Pattern {
                         let has_valid = class_chars.iter().any(|&ch| is_valid(ch));
                         if !has_valid {
                             for &ic in &class_chars {
-                                if ic.is_alphanumeric() && !invalid.contains(&ic) {
+                                if !invalid.contains(&ic) {
                                     invalid.push(ic);
                                 }
                             }
@@ -114,8 +120,10 @@ impl Pattern {
                     class_negated = true;
                     class_start = false;
                 }
-                // Skip regex metacharacters
-                '^' | '$' | '.' | '*' | '+' | '?' | '(' | ')' | '{' | '}' | '|' => {
+                // Regex metacharacters: skip outside classes, treat as literals inside
+                '^' | '$' | '.' | '*' | '+' | '?' | '(' | ')' | '{' | '}' | '|'
+                    if !in_class =>
+                {
                     class_start = false;
                 }
                 '-' if in_class => {
@@ -158,6 +166,9 @@ impl Pattern {
                 }
                 _ => {
                     class_start = false;
+                    if in_class && !class_chars.contains(&c) {
+                        class_chars.push(c);
+                    }
                 }
             }
         }
@@ -580,5 +591,46 @@ mod tests {
         let pat = Pattern::new("^1[-0]", false).unwrap();
         let invalid = pat.validate_charset(AddressFormat::P2pkh);
         assert_eq!(invalid, vec!['0']);
+    }
+
+    #[test]
+    fn test_validate_charset_dot_in_class() {
+        // [.] is a literal dot inside a class, not in any address charset
+        let pat = Pattern::new("^1[.]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert_eq!(invalid, vec!['.']);
+    }
+
+    #[test]
+    fn test_validate_charset_underscore_in_class() {
+        // [_] is a literal underscore inside a class
+        let pat = Pattern::new("^1[_]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert_eq!(invalid, vec!['_']);
+    }
+
+    #[test]
+    fn test_validate_charset_dot_with_valid_in_class() {
+        // [.A] has dot (invalid) and A (valid Base58) - class is satisfiable
+        let pat = Pattern::new("^1[.A]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert!(invalid.is_empty());
+    }
+
+    #[test]
+    fn test_validate_charset_escaped_dot_in_class() {
+        // [\\.] is an escaped literal dot inside a class - same as [.]
+        let pat = Pattern::new("^1[\\.]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert_eq!(invalid, vec!['.']);
+    }
+
+    #[test]
+    fn test_validate_charset_escaped_caret_then_literal_caret() {
+        // [\\^^] has escaped ^ (literal) then ^ (should also be literal, not negation)
+        // Both ^ are invalid in Base58
+        let pat = Pattern::new("^1[\\^^]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert_eq!(invalid, vec!['^']);
     }
 }
