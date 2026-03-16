@@ -176,7 +176,7 @@ impl AddressGenerator {
 }
 
 /// Convert Ethereum address to checksum address (EIP-55)
-fn to_checksum_address(address: &str) -> String {
+pub(crate) fn to_checksum_address(address: &str) -> String {
     let address = address.trim_start_matches("0x").to_lowercase();
     let mut hasher = Keccak256::new();
     hasher.update(address.as_bytes());
