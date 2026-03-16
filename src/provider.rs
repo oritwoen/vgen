@@ -43,8 +43,7 @@ fn resolve_boha(path: &str) -> Result<ProviderResult> {
     let key_range = puzzle
         .key
         .as_ref()
-        .and_then(|k| k.range_big())
-        .map(|(start, end)| (start.clone(), end.clone()));
+        .and_then(boha::Key::range_big);
 
     Ok(ProviderResult {
         address: puzzle.address.value.to_string(),

@@ -194,18 +194,10 @@ impl Pattern {
             let pattern_after_anchor = &self.original[1..];
             match format {
                 AddressFormat::P2pkh | AddressFormat::P2pkhUncompressed => {
-                    if pattern_after_anchor.starts_with('1') {
-                        1
-                    } else {
-                        0
-                    }
+                    usize::from(pattern_after_anchor.starts_with('1'))
                 }
                 AddressFormat::P2shP2wpkh => {
-                    if pattern_after_anchor.starts_with('3') {
-                        1
-                    } else {
-                        0
-                    }
+                    usize::from(pattern_after_anchor.starts_with('3'))
                 }
                 AddressFormat::P2wpkh => {
                     // bc1q prefix
@@ -215,11 +207,7 @@ impl Pattern {
                         3
                     } else if pattern_after_anchor.starts_with("bc") {
                         2
-                    } else if pattern_after_anchor.starts_with('b') {
-                        1
-                    } else {
-                        0
-                    }
+                    } else { usize::from(pattern_after_anchor.starts_with('b')) }
                 }
                 AddressFormat::P2tr => {
                     // bc1p prefix
@@ -229,11 +217,7 @@ impl Pattern {
                         3
                     } else if pattern_after_anchor.starts_with("bc") {
                         2
-                    } else if pattern_after_anchor.starts_with('b') {
-                        1
-                    } else {
-                        0
-                    }
+                    } else { usize::from(pattern_after_anchor.starts_with('b')) }
                 }
                 AddressFormat::Ethereum => {
                     // 0x prefix
@@ -241,11 +225,7 @@ impl Pattern {
                         || pattern_after_anchor.starts_with("0X")
                     {
                         2
-                    } else if pattern_after_anchor.starts_with('0') {
-                        1
-                    } else {
-                        0
-                    }
+                    } else { usize::from(pattern_after_anchor.starts_with('0')) }
                 }
             }
         } else {
