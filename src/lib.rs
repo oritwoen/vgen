@@ -114,8 +114,13 @@ enum Commands {
     /// Estimate difficulty of a pattern (dry run)
     Estimate {
         /// Regex pattern to analyze
+        /// Or data provider reference (e.g., "boha:b1000:66")
         #[arg(short, long)]
         pattern: String,
+
+        /// When pattern is a data provider, use first N characters of address as prefix
+        #[arg(short = 'l', long)]
+        prefix_length: Option<usize>,
 
         /// Address format
         #[arg(short, long, default_value = "p2pkh")]
@@ -338,11 +343,15 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
 
         Commands::Estimate {
             pattern,
+            prefix_length,
             format,
             ignore_case,
         } => {
-            let addr_format: AddressFormat = format.into();
-            let pat = Pattern::new(&pattern, ignore_case).context("Failed to compile pattern")?;
+            let (resolved_pattern, addr_format) =
+                resolve_pattern_and_format(&pattern, prefix_length, format.into())?;
+
+            let pat = Pattern::new(&resolved_pattern, ignore_case)
+                .context("Failed to compile pattern")?;
 
             let difficulty = pat.estimate_difficulty(addr_format);
 
@@ -352,16 +361,8 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
 
             let expected_secs = difficulty as f64 / rate;
 
-            println!("Pattern: {}", pattern);
-            println!(
-                "Format: {}",
-                match format {
-                    Format::P2pkh => "P2PKH (1...)",
-                    Format::P2wpkh => "P2WPKH (bc1q...)",
-                    Format::P2tr => "P2TR (bc1p...)",
-                    Format::Ethereum => "Ethereum (0x...)",
-                }
-            );
+            println!("Pattern: {}", resolved_pattern);
+            println!("Format: {}", addr_format);
             println!("Case insensitive: {}", ignore_case);
             println!();
             println!("Estimated difficulty: 1 in {}", difficulty);
@@ -559,16 +560,14 @@ fn resolve_pattern_and_format(
     default_format: AddressFormat,
 ) -> Result<(String, AddressFormat)> {
     if let Some(provider_result) = provider::resolve(pattern)? {
-        let prefix_len = prefix_length.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Provider pattern '{}' requires --prefix-length (-l) to specify how many \
-                 characters of address '{}' to match",
-                pattern,
-                provider_result.address
-            )
-        })?;
-
-        let resolved = provider::build_pattern(&provider_result, prefix_len);
+        let resolved = if let Some(prefix_len) = prefix_length {
+            if prefix_len == 0 {
+                anyhow::bail!("--prefix-length must be at least 1 for provider patterns");
+            }
+            provider::build_pattern(&provider_result, prefix_len)
+        } else {
+            provider::build_exact_pattern(&provider_result)
+        };
 
         eprintln!(
             "Provider: {} → {} → pattern '{}'",
@@ -900,11 +899,11 @@ fn run_search(
                 writeln!(
                     writer,
                     "{},{},{},{},{},{},{},{}",
-                    vanity_result.address,
-                    vanity_result.wif,
-                    vanity_result.private_key_hex,
-                    vanity_result.format,
-                    vanity_result.pattern,
+                    csv_escape(&vanity_result.address),
+                    csv_escape(&vanity_result.wif),
+                    csv_escape(&vanity_result.private_key_hex),
+                    csv_escape(&vanity_result.format),
+                    csv_escape(&vanity_result.pattern),
                     vanity_result.operations,
                     vanity_result.elapsed_secs,
                     vanity_result.rate
@@ -1009,6 +1008,27 @@ fn format_duration(secs: f64) -> String {
         format!("{:.1}d", secs / 86400.0)
     } else {
         format!("{:.1}y", secs / 31536000.0)
+    }
+}
+
+/// Escape a field for RFC 4180 CSV output.
+///
+/// Fields containing commas, double quotes, or newlines are wrapped in
+/// double quotes with internal quotes doubled.
+fn csv_escape(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
+        let mut out = String::with_capacity(field.len() + 2);
+        out.push('"');
+        for c in field.chars() {
+            if c == '"' {
+                out.push('"');
+            }
+            out.push(c);
+        }
+        out.push('"');
+        out
+    } else {
+        field.to_string()
     }
 }
 
@@ -1486,4 +1506,29 @@ fn run_tui(
     )?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_csv_escape_plain() {
+        assert_eq!(csv_escape("hello"), "hello");
+    }
+
+    #[test]
+    fn test_csv_escape_comma() {
+        assert_eq!(csv_escape("[a-f]{1,2}"), "\"[a-f]{1,2}\"");
+    }
+
+    #[test]
+    fn test_csv_escape_quotes() {
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
+
+    #[test]
+    fn test_csv_escape_newline() {
+        assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+    }
 }
