@@ -214,6 +214,8 @@ enum Commands {
 enum Format {
     P2pkh,
     P2wpkh,
+    #[value(alias = "p2sh-p2wpkh")]
+    P2shP2wpkh,
     P2tr,
     Ethereum,
 }
@@ -223,6 +225,7 @@ impl From<Format> for AddressFormat {
         match f {
             Format::P2pkh => AddressFormat::P2pkh,
             Format::P2wpkh => AddressFormat::P2wpkh,
+            Format::P2shP2wpkh => AddressFormat::P2shP2wpkh,
             Format::P2tr => AddressFormat::P2tr,
             Format::Ethereum => AddressFormat::Ethereum,
         }
@@ -1560,6 +1563,21 @@ mod tests {
         // It should fall back to CPU instead of hitting unreachable!() in GPU path
         let result = run_from_args([
             "vgen", "range", "--range", "1:FF", "-f", "ethereum", "--no-tui",
+        ]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_generate_p2sh_p2wpkh() {
+        let result = run_from_args([
+            "vgen",
+            "generate",
+            "-p",
+            "^3",
+            "-f",
+            "p2sh-p2wpkh",
+            "--no-tui",
+            "--no-gpu",
         ]);
         assert!(result.is_ok());
     }

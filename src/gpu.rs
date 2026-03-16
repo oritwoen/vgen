@@ -1016,6 +1016,16 @@ pub async fn scan_gpu_with_runner(
                             .expect("valid script")
                             .to_string()
                     }
+                    AddressFormat::P2shP2wpkh => {
+                        use bitcoin::hashes::Hash;
+                        use bitcoin::ScriptBuf;
+                        use bitcoin::WPubkeyHash;
+                        let wpkh = WPubkeyHash::from_byte_array(*hash160);
+                        let redeem_script = ScriptBuf::new_p2wpkh(&wpkh);
+                        bitcoin::Address::p2sh(&redeem_script, bitcoin::Network::Bitcoin)
+                            .expect("valid script")
+                            .to_string()
+                    }
                     AddressFormat::Ethereum => {
                         unreachable!("GPU path not supported for Ethereum")
                     }
