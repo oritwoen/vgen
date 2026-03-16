@@ -12,17 +12,14 @@ Bitcoin vanity address generator with regex pattern matching and GPU acceleratio
 
 ## Features
 
-- Generate Bitcoin addresses matching custom regex patterns
-- Support for multiple address formats:
-  - P2PKH (1...)
-  - P2WPKH / Bech32 (bc1q...)
-  - Ethereum (0x...)
+- Generate cryptocurrency addresses matching custom regex patterns
+- Multiple address formats: P2PKH (1...), P2WPKH (bc1q...), P2TR (bc1p...), P2SH-P2WPKH (3...), Ethereum (0x...)
 - GPU acceleration via wgpu (Vulkan/Metal/DX12/OpenGL backends)
 - Parallel CPU scanning with rayon
 - Interactive TUI with real-time statistics
 - Range scanning for Bitcoin Puzzle challenges
 - Data providers for puzzle/bounty integration (boha)
-- JSON and minimal output formats
+- Output: text, JSON, JSON Lines, CSV, minimal
 
 ## Installation
 
@@ -58,14 +55,26 @@ vgen generate -p "^1cat" -i
 # Bech32 address ending with "dead"
 vgen generate -p "dead$" -f p2wpkh
 
+# Taproot address
+vgen generate -p "^bc1p.*cat" -f p2tr
+
+# P2SH-P2WPKH (nested SegWit)
+vgen generate -p "^3Cat" -f p2sh-p2wpkh
+
 # Ethereum address
 vgen generate -p "^0xdead" -f ethereum
 
 # CPU only (GPU is enabled by default)
 vgen generate -p "^1Cat" --no-gpu
 
+# Pick a specific GPU backend
+vgen generate -p "^1Cat" --backend vulkan
+
 # Find multiple matches
 vgen generate -p "^1Cat" -c 5
+
+# Quiet mode
+vgen generate -p "^1Cat" -q
 ```
 
 ### Estimate difficulty
@@ -118,6 +127,12 @@ vgen verify -k "0c28fca386c7a227600b2fe50b7cae11ec86d3bf1fbe471be89827e19d72aa1d
 vgen verify -k "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ" -a "1GAehh7TsJAHuUAeKZcXf5CnwuGuGgyX2S"
 ```
 
+### List GPUs
+
+```bash
+vgen list-gpus
+```
+
 ## Output formats
 
 ```bash
@@ -155,7 +170,7 @@ Features:
 
 ## Performance
 
-GPU acceleration is enabled by default and falls back to CPU if no compatible GPU is found.
+GPU acceleration is enabled by default and falls back to CPU if no compatible GPU is found. Use `--backend` to force a specific backend (vulkan, metal, dx12, gl) or `--no-gpu` for CPU only.
 
 - CPU: ~50,000-200,000 keys/sec (depends on CPU)
 - GPU: ~500,000-2,000,000 keys/sec (depends on GPU)
