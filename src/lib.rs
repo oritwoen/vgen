@@ -735,15 +735,15 @@ fn run_search(
     }
 
     // TUI path: collect matches, then fall through to output logic
-    let mut tui_matches: Option<Vec<VanityResult>> = None;
+    let mut tui_matches: Option<(Vec<VanityResult>, u64, f64)> = None;
     if use_tui {
         match run_tui(pattern, ignore_case, config.clone(), gpu_runner.clone()) {
-            Ok(matches) => {
+            Ok((matches, ops, elapsed)) => {
                 if file.is_none() && matches!(output, OutputFormat::Text) {
                     // Default text to stdout with no --file: TUI already showed results
                     return Ok(());
                 }
-                tui_matches = Some(matches);
+                tui_matches = Some((matches, ops, elapsed));
             }
             Err(e) => {
                 eprintln!("TUI failed: ({e:?}). Falling back to console output.");
@@ -752,9 +752,7 @@ fn run_search(
     }
 
     // Build result: either from TUI matches or from fresh scan
-    let result = if let Some(tui_results) = tui_matches {
-        let ops = tui_results.first().map_or(0, |m| m.operations);
-        let elapsed = tui_results.first().map_or(0.0, |m| m.elapsed_secs);
+    let result = if let Some((tui_results, ops, elapsed)) = tui_matches {
         ScanResult {
             matches: tui_results
                 .into_iter()
@@ -1091,7 +1089,7 @@ fn run_tui(
     ignore_case: bool,
     config: ScanConfig,
     gpu_runner: Option<Arc<GpuRunner>>,
-) -> Result<Vec<VanityResult>> {
+) -> Result<(Vec<VanityResult>, u64, f64)> {
     let pat = Pattern::new(pattern, ignore_case).context("Failed to compile pattern")?;
     let pattern_owned = pattern.to_string();
     let format_label = config.format.to_string();
@@ -1537,8 +1535,12 @@ fn run_tui(
     )?;
     terminal.show_cursor()?;
 
-    let matches = state.lock().unwrap().matches.clone();
-    Ok(matches)
+    let st = state.lock().unwrap();
+    let matches = st.matches.clone();
+    let operations = st.operations;
+    let elapsed = st.elapsed;
+    drop(st);
+    Ok((matches, operations, elapsed))
 }
 
 #[cfg(test)]
