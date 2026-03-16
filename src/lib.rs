@@ -444,6 +444,16 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             println!("Ethereum address:   {}", eth_addr);
 
             if let Some(expected) = address {
+                // BIP173: Bech32 addresses are valid in uppercase (BC1Q.../BC1P...)
+                let normalized = if expected
+                    .get(..3)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("bc1"))
+                {
+                    expected.to_lowercase()
+                } else {
+                    expected.clone()
+                };
+
                 let all_addrs = [
                     p2pkh_addr.to_string(),
                     p2pkh_uncompressed_addr.to_string(),
@@ -453,17 +463,16 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     eth_addr.clone(),
                 ];
 
-                if all_addrs.contains(&expected) {
+                if all_addrs.contains(&normalized) {
                     println!("\nMATCH!");
+                } else if normalized
+                    .get(..2)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("0x"))
+                    && eth_addr.eq_ignore_ascii_case(&normalized)
+                {
+                    println!("\nMATCH! (Ethereum, case-insensitive)");
                 } else {
-                    // Also try case-insensitive for Ethereum
-                    if expected.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("0x"))
-                        && eth_addr.eq_ignore_ascii_case(&expected)
-                    {
-                        println!("\nMATCH! (Ethereum, case-insensitive)");
-                    } else {
-                        println!("\nMISMATCH! Expected: {}", expected);
-                    }
+                    println!("\nMISMATCH! Expected: {}", expected);
                 }
             }
             Ok(())
