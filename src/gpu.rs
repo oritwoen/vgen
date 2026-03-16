@@ -80,7 +80,7 @@ pub(crate) fn is_software_adapter(info: &wgpu::AdapterInfo) -> bool {
 }
 
 // Default batch size (can be overridden by config)
-const DEFAULT_BATCH_SIZE: u32 = 1024 * 1024; // 1 Million
+pub const DEFAULT_BATCH_SIZE: u32 = 512 * 1024; // 512K
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
