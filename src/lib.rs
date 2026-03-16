@@ -521,8 +521,11 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             let count = if count == 0 { usize::MAX } else { count };
             let repeat = if repeat == 0 { 1 } else { repeat };
 
-            // GPU is default
-            let use_gpu = !no_gpu;
+            // GPU is default, but not supported for Ethereum yet
+            let use_gpu = !no_gpu && !matches!(addr_format, AddressFormat::Ethereum);
+            if !no_gpu && matches!(addr_format, AddressFormat::Ethereum) {
+                eprintln!("Warning: GPU acceleration not yet supported for Ethereum. Falling back to CPU.");
+            }
 
             // Assume TUI if interactive
             let is_tty = std::io::stdout().is_terminal();
@@ -1549,5 +1552,15 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("--prefix-length must be at least 1"));
+    }
+
+    #[test]
+    fn test_range_ethereum_no_panic() {
+        // Regression test for #16: range with -f ethereum should not panic
+        // It should fall back to CPU instead of hitting unreachable!() in GPU path
+        let result = run_from_args([
+            "vgen", "range", "--range", "1:FF", "-f", "ethereum", "--no-tui",
+        ]);
+        assert!(result.is_ok());
     }
 }
