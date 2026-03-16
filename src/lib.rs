@@ -737,112 +737,134 @@ fn run_search(
         }
     }
 
-    // TUI path
+    // TUI path: collect matches, then fall through to output logic
+    let mut tui_matches: Option<(Vec<VanityResult>, u64, f64)> = None;
     if use_tui {
-        let tui_result = run_tui(pattern, ignore_case, config.clone(), gpu_runner.clone());
-        match tui_result {
-            Ok(()) => return Ok(()),
+        match run_tui(pattern, ignore_case, config.clone(), gpu_runner.clone()) {
+            Ok((matches, ops, elapsed)) => {
+                if file.is_none() && matches!(output, OutputFormat::Text) {
+                    // Default text to stdout with no --file: TUI already showed results
+                    return Ok(());
+                }
+                tui_matches = Some((matches, ops, elapsed));
+            }
             Err(e) => {
                 eprintln!("TUI failed: ({e:?}). Falling back to console output.");
             }
         }
     }
 
-    // --- NON-TUI PATH ---
-
-    let pb = if quiet {
-        None
-    } else {
-        let pb = ProgressBar::new_spinner();
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} [{elapsed_precise}] {msg}")
-                .unwrap(),
-        );
-        pb.set_message(format!("Searching for pattern '{}'...", pattern));
-        Some(pb)
-    };
-
-    let pb_clone = pb.clone();
-    let base_ops = Arc::new(AtomicU64::new(0));
-    let progress_cb: Option<ProgressCallback> = pb_clone.map(|pb| {
-        let base = base_ops.clone();
-        Arc::new(move |ops: u64| {
-            let total = base.load(Ordering::Relaxed).saturating_add(ops);
-            pb.set_message(format!("Checked {} addresses", format_with_commas(total)));
-        }) as ProgressCallback
-    });
-
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_clone = stop.clone();
-    ctrlc_handler(stop_clone);
-
-    // Build a single runtime for GPU path to avoid per-iteration overhead
-    let mut rt = if gpu_runner.is_some() {
-        Some(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?,
-        )
-    } else {
-        None
-    };
-
-    let start_total = std::time::Instant::now();
-    let mut all_matches = Vec::new();
-    let mut total_ops: u64 = 0;
-
-    for i in 0..repeat {
-        if let Some(pb) = &pb {
-            pb.set_message(format!(
-                "Run {} of {} (pattern '{}')...",
-                i + 1,
-                repeat,
-                pattern
-            ));
+    // Build result: either from TUI matches or from fresh scan
+    let result = if let Some((tui_results, ops, elapsed)) = tui_matches {
+        ScanResult {
+            matches: tui_results
+                .into_iter()
+                .map(|m| GeneratedAddress {
+                    address: m.address,
+                    wif: m.wif,
+                    hex: m.private_key_hex,
+                    format: config.format,
+                })
+                .collect(),
+            operations: ops,
+            elapsed_secs: elapsed,
         }
-
-        let result = if let Some(runner) = &gpu_runner {
-            let rt_ref = rt.as_mut().expect("runtime should exist");
-            if config.format == AddressFormat::P2tr {
-                rt_ref.block_on(scan_gpu_p2tr_with_runner(
-                    &pat,
-                    &config,
-                    progress_cb.clone(),
-                    Some(stop.clone()),
-                    runner.clone(),
-                ))?
-            } else {
-                rt_ref.block_on(scan_gpu_with_runner(
-                    &pat,
-                    &config,
-                    progress_cb.clone(),
-                    Some(stop.clone()),
-                    runner.clone(),
-                ))?
-            }
+    } else {
+        // --- NON-TUI PATH ---
+        let pb = if quiet {
+            None
         } else {
-            scan_with_progress(&pat, &config, progress_cb.clone(), Some(stop.clone()))
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(
+                ProgressStyle::default_spinner()
+                    .template("{spinner:.green} [{elapsed_precise}] {msg}")
+                    .unwrap(),
+            );
+            pb.set_message(format!("Searching for pattern '{}'...", pattern));
+            Some(pb)
         };
 
-        total_ops = total_ops.saturating_add(result.operations);
-        base_ops.store(total_ops, Ordering::Relaxed);
-        all_matches.extend(result.matches);
+        let pb_clone = pb.clone();
+        let base_ops = Arc::new(AtomicU64::new(0));
+        let progress_cb: Option<ProgressCallback> = pb_clone.map(|pb| {
+            let base = base_ops.clone();
+            Arc::new(move |ops: u64| {
+                let total = base.load(Ordering::Relaxed).saturating_add(ops);
+                pb.set_message(format!("Checked {} addresses", format_with_commas(total)));
+            }) as ProgressCallback
+        });
 
-        if stop.load(Ordering::Relaxed) {
-            break;
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = stop.clone();
+        ctrlc_handler(stop_clone);
+
+        // Build a single runtime for GPU path to avoid per-iteration overhead
+        let mut rt = if gpu_runner.is_some() {
+            Some(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?,
+            )
+        } else {
+            None
+        };
+
+        let start_total = std::time::Instant::now();
+        let mut all_matches = Vec::new();
+        let mut total_ops: u64 = 0;
+
+        for i in 0..repeat {
+            if let Some(pb) = &pb {
+                pb.set_message(format!(
+                    "Run {} of {} (pattern '{}')...",
+                    i + 1,
+                    repeat,
+                    pattern
+                ));
+            }
+
+            let result = if let Some(runner) = &gpu_runner {
+                let rt_ref = rt.as_mut().expect("runtime should exist");
+                if config.format == AddressFormat::P2tr {
+                    rt_ref.block_on(scan_gpu_p2tr_with_runner(
+                        &pat,
+                        &config,
+                        progress_cb.clone(),
+                        Some(stop.clone()),
+                        runner.clone(),
+                    ))?
+                } else {
+                    rt_ref.block_on(scan_gpu_with_runner(
+                        &pat,
+                        &config,
+                        progress_cb.clone(),
+                        Some(stop.clone()),
+                        runner.clone(),
+                    ))?
+                }
+            } else {
+                scan_with_progress(&pat, &config, progress_cb.clone(), Some(stop.clone()))
+            };
+
+            total_ops = total_ops.saturating_add(result.operations);
+            base_ops.store(total_ops, Ordering::Relaxed);
+            all_matches.extend(result.matches);
+
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
         }
-    }
 
-    let result = ScanResult {
-        matches: all_matches,
-        operations: total_ops,
-        elapsed_secs: start_total.elapsed().as_secs_f64(),
+        if let Some(pb) = pb {
+            pb.finish_and_clear();
+        }
+
+        ScanResult {
+            matches: all_matches,
+            operations: total_ops,
+            elapsed_secs: start_total.elapsed().as_secs_f64(),
+        }
     };
-
-    if let Some(pb) = pb {
-        pb.finish_and_clear();
-    }
 
     // Output results
     let mut writer: Box<dyn Write> = if let Some(ref path) = file {
@@ -1070,7 +1092,7 @@ fn run_tui(
     ignore_case: bool,
     config: ScanConfig,
     gpu_runner: Option<Arc<GpuRunner>>,
-) -> Result<()> {
+) -> Result<(Vec<VanityResult>, u64, f64)> {
     let pat = Pattern::new(pattern, ignore_case).context("Failed to compile pattern")?;
     let pattern_owned = pattern.to_string();
     let format_label = config.format.to_string();
@@ -1515,7 +1537,13 @@ fn run_tui(
         crossterm::terminal::LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
-    Ok(())
+
+    let st = state.lock().unwrap();
+    let matches = st.matches.clone();
+    let operations = st.operations;
+    let elapsed = st.elapsed;
+    drop(st);
+    Ok((matches, operations, elapsed))
 }
 
 #[cfg(test)]
