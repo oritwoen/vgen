@@ -1,6 +1,6 @@
 ---
 name: vgen
-description: Query package metadata from vgen, a Bitcoin vanity address generator with regex pattern matching and GPU acceleration. Use when generating Bitcoin/Ethereum vanity addresses, scanning key ranges for Bitcoin Puzzles, or verifying private keys against addresses. Supports P2PKH, P2WPKH, P2SH-P2WPKH, P2TR, and Ethereum formats.
+description: Bitcoin vanity address generator with regex pattern matching and GPU acceleration. Use when generating Bitcoin/Ethereum vanity addresses, scanning key ranges for Bitcoin Puzzles, or verifying private keys against addresses. Supports P2PKH, P2WPKH, P2SH-P2WPKH, P2TR, and Ethereum formats.
 metadata:
   author: oritwoen
   version: "0.2.0"
@@ -20,7 +20,7 @@ Supports P2PKH (`1...`), P2WPKH (`bc1q...`), P2SH-P2WPKH (`3...`), P2TR (`bc1p..
 # P2PKH starting with "1Cat"
 vgen generate -p "^1Cat"
 
-# Case insensitive (P2PKH only)
+# Case insensitive (Base58 + Ethereum)
 vgen generate -p "^1cat" -i
 
 # Bech32 ending with "dead"
