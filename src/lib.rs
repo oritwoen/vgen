@@ -444,11 +444,13 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             println!("Ethereum address:   {}", eth_addr);
 
             if let Some(expected) = address {
-                // BIP173: Bech32 addresses are valid in uppercase (BC1Q.../BC1P...)
-                let normalized = if expected
+                // BIP173: Bech32 allows all-lowercase or all-uppercase, not mixed
+                let is_bech32 = expected
                     .get(..3)
-                    .is_some_and(|p| p.eq_ignore_ascii_case("bc1"))
-                {
+                    .is_some_and(|p| p.eq_ignore_ascii_case("bc1"));
+                let is_single_case = expected.chars().filter(|c| c.is_ascii_alphabetic()).all(|c| c.is_ascii_lowercase())
+                    || expected.chars().filter(|c| c.is_ascii_alphabetic()).all(|c| c.is_ascii_uppercase());
+                let normalized = if is_bech32 && is_single_case {
                     expected.to_lowercase()
                 } else {
                     expected.clone()
