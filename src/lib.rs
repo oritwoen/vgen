@@ -729,7 +729,7 @@ fn run_search(
                 if backend == GpuBackend::Auto {
                     eprintln!("Failed to initialize GPU; falling back to CPU.");
                     eprintln!("  Error: {err_msg}");
-                    if cfg!(target_os = "macos") || err_msg.contains("Metal") || err_msg.contains("metal") {
+                    if err_msg.contains("Metal") || err_msg.contains("metal") {
                         eprintln!("  Note: Metal shader compilation may fail on macOS due to shader complexity.");
                         eprintln!("  Use --no-gpu for CPU-only mode, or --backend vulkan with MoltenVK installed.");
                     }
