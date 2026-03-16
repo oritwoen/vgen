@@ -709,7 +709,7 @@ fn run_search(
             .enable_all()
             .build()?;
         match rt.block_on(GpuRunner::new(
-            config.gpu_batch_size.unwrap_or(524288),
+            config.gpu_batch_size.unwrap_or(gpu::DEFAULT_BATCH_SIZE),
             backend,
         )) {
             Ok(runner) => {
