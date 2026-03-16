@@ -725,13 +725,22 @@ fn run_search(
                 }
             }
             Err(e) => {
+                let err_msg = format!("{e:?}");
                 if backend == GpuBackend::Auto {
-                    eprintln!("Failed to initialize GPU ({e:?}); falling back to CPU.");
+                    eprintln!("Failed to initialize GPU; falling back to CPU.");
+                    eprintln!("  Error: {err_msg}");
+                    if cfg!(target_os = "macos") || err_msg.contains("Metal") || err_msg.contains("metal") {
+                        eprintln!("  Note: Metal shader compilation may fail on macOS due to shader complexity.");
+                        eprintln!("  Use --no-gpu for CPU-only mode, or --backend vulkan with MoltenVK installed.");
+                    }
                 } else {
-                    anyhow::bail!(
-                        "Failed to initialize GPU with backend {}: {e:?}",
-                        backend.name()
-                    );
+                    eprintln!("Failed to initialize GPU with backend {}.", backend.name());
+                    eprintln!("  Error: {err_msg}");
+                    if matches!(backend, GpuBackend::Metal) {
+                        eprintln!("  Note: Metal shader compilation may fail due to shader complexity.");
+                        eprintln!("  Try --backend vulkan (requires MoltenVK) or --no-gpu for CPU-only mode.");
+                    }
+                    anyhow::bail!("GPU initialization failed with backend {}", backend.name());
                 }
             }
         }
