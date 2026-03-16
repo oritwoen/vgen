@@ -624,4 +624,13 @@ mod tests {
         let invalid = pat.validate_charset(AddressFormat::P2pkh);
         assert_eq!(invalid, vec!['.']);
     }
+
+    #[test]
+    fn test_validate_charset_escaped_caret_then_literal_caret() {
+        // [\\^^] has escaped ^ (literal) then ^ (should also be literal, not negation)
+        // Both ^ are invalid in Base58
+        let pat = Pattern::new("^1[\\^^]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert_eq!(invalid, vec!['^']);
+    }
 }
