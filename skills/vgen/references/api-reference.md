@@ -33,7 +33,7 @@ pub struct Pattern { /* ... */ }
 
 impl Pattern {
     // Compile regex. Returns Err on empty or invalid pattern.
-    pub fn new(pattern: &str, case_insensitive: bool) -> Result<Self>;
+    pub fn new(pattern: &str, case_insensitive: bool) -> anyhow::Result<Self>;
 
     // Test if address matches the pattern.
     pub fn matches(&self, address: &str) -> bool;
@@ -106,7 +106,7 @@ pub struct GpuRunner { /* ... */ }
 
 impl GpuRunner {
     // Initialize GPU with given batch size and backend preference.
-    pub async fn new(batch_size: u32, backend: GpuBackend) -> Result<Self>;
+    pub async fn new(batch_size: u32, backend: GpuBackend) -> anyhow::Result<Self>;
 
     pub fn backend(&self) -> GpuBackend;
 }
@@ -118,7 +118,7 @@ pub async fn scan_gpu_with_runner(
     progress_cb: Option<ProgressCallback>,
     stop: Option<Arc<AtomicBool>>,
     runner: Arc<GpuRunner>,
-) -> Result<ScanResult>;
+) -> anyhow::Result<ScanResult>;
 
 // High-level GPU scan for P2TR (Taproot).
 pub async fn scan_gpu_p2tr_with_runner(
@@ -127,7 +127,7 @@ pub async fn scan_gpu_p2tr_with_runner(
     progress_cb: Option<ProgressCallback>,
     stop: Option<Arc<AtomicBool>>,
     runner: Arc<GpuRunner>,
-) -> Result<ScanResult>;
+) -> anyhow::Result<ScanResult>;
 ```
 
 GPU is not available for Ethereum or P2SH-P2WPKH - these fall back to CPU.

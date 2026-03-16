@@ -160,9 +160,9 @@ for addr in &result.matches {
 ```rust
 use vgen::{AddressFormat, AddressGenerator};
 
-let gen = AddressGenerator::new(AddressFormat::P2pkh);
+let generator = AddressGenerator::new(AddressFormat::P2pkh);
 let secret = [1u8; 32]; // your 32-byte secret key
-let addr = gen.generate(&secret).expect("valid key");
+let addr = generator.generate(&secret).expect("valid key");
 // addr.address, addr.wif, addr.hex, addr.format
 ```
 
@@ -177,7 +177,7 @@ For full type definitions and GPU API details, see [api-reference.md](references
 ## Limitations
 
 - GPU acceleration works for P2PKH, P2WPKH, and P2TR. Other formats fall back to CPU automatically.
-- Case-insensitive matching (`-i`) only works with P2PKH in `generate` mode.
+- Case-insensitive matching (`-i`) works with Base58 formats (P2PKH, P2SH-P2WPKH) in `generate` and `estimate` modes. Bech32 and Ethereum addresses have fixed casing, so `-i` is redundant there.
 - Ethereum format is CPU-only in `range` mode.
 - `--prefix-length` must be at least 1 when used.
 - This is experimental software. Do not use generated keys for real funds without thorough verification.
