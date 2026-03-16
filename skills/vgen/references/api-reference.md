@@ -7,7 +7,7 @@
 ```rust
 pub enum AddressFormat {
     P2pkh,              // 1... (Base58, compressed)
-    P2pkhUncompressed,  // 1... (Base58, uncompressed)
+    P2pkhUncompressed,  // 1... (Base58, uncompressed) - library-only, not in CLI
     P2wpkh,             // bc1q... (Bech32)
     P2shP2wpkh,         // 3... (Base58)
     P2tr,               // bc1p... (Bech32m)

@@ -177,7 +177,6 @@ For full type definitions and GPU API details, see [api-reference.md](references
 ## Limitations
 
 - GPU acceleration works for P2PKH, P2WPKH, and P2TR. Other formats fall back to CPU automatically.
-- Case-insensitive matching (`-i`) works with Base58 formats (P2PKH, P2SH-P2WPKH) in `generate` and `estimate` modes. Bech32 and Ethereum addresses have fixed casing, so `-i` is redundant there.
-- Ethereum format is CPU-only in `range` mode.
+- Case-insensitive matching (`-i`) works with Base58 formats (P2PKH, P2SH-P2WPKH) and Ethereum (EIP-55 mixed-case) in `generate` and `estimate` modes. Bech32 addresses are always lowercase, so `-i` is redundant for P2WPKH/P2TR.
 - `--prefix-length` must be at least 1 when used.
 - This is experimental software. Do not use generated keys for real funds without thorough verification.
