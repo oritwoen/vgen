@@ -82,15 +82,15 @@ impl ScanResult {
 ## Scanner functions
 
 ```rust
-// One-shot CPU scan. Blocks until `count` matches found or `stop` signaled.
+// One-shot CPU scan. Blocks until `count` matches found.
 pub fn scan(pattern: &Pattern, config: &ScanConfig) -> ScanResult;
 
-// CPU scan with progress callback (called with cumulative key count).
+// CPU scan with optional progress callback and stop flag.
 pub fn scan_with_progress(
     pattern: &Pattern,
     config: &ScanConfig,
-    stop: Arc<AtomicBool>,
-    callback: ProgressCallback,
+    progress_callback: Option<ProgressCallback>,
+    stop_flag: Option<Arc<AtomicBool>>,
 ) -> ScanResult;
 
 pub type ProgressCallback = Arc<dyn Fn(u64) + Send + Sync>;
@@ -113,20 +113,20 @@ impl GpuRunner {
 
 // High-level GPU scan for hash-based formats (P2PKH, P2WPKH).
 pub async fn scan_gpu_with_runner(
-    runner: &GpuRunner,
     pattern: &Pattern,
     config: &ScanConfig,
-    stop: Arc<AtomicBool>,
-    callback: ProgressCallback,
+    progress_cb: Option<ProgressCallback>,
+    stop: Option<Arc<AtomicBool>>,
+    runner: Arc<GpuRunner>,
 ) -> Result<ScanResult>;
 
 // High-level GPU scan for P2TR (Taproot).
 pub async fn scan_gpu_p2tr_with_runner(
-    runner: &GpuRunner,
     pattern: &Pattern,
     config: &ScanConfig,
-    stop: Arc<AtomicBool>,
-    callback: ProgressCallback,
+    progress_cb: Option<ProgressCallback>,
+    stop: Option<Arc<AtomicBool>>,
+    runner: Arc<GpuRunner>,
 ) -> Result<ScanResult>;
 ```
 
@@ -139,8 +139,8 @@ pub struct AddressGenerator { /* Secp256k1 context + network + format */ }
 
 impl AddressGenerator {
     pub fn new(format: AddressFormat) -> Self;
-    pub fn generate_random(&self) -> GeneratedAddress;
-    pub fn generate_from_key(&self, secret_key: &[u8; 32]) -> GeneratedAddress;
+    // Generate address from a 32-byte secret key. Returns None if key is invalid.
+    pub fn generate(&self, secret: &[u8; 32]) -> Option<GeneratedAddress>;
 }
 ```
 

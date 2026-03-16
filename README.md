@@ -211,7 +211,7 @@ npx skills add oritwoen/vgen
 Auto-generated from live docs, issues, and releases using [skilld](https://github.com/harlan-zw/skilld):
 
 ```bash
-npx skilld add vgen
+npx skilld add oritwoen/vgen
 ```
 
 ## Roadmap

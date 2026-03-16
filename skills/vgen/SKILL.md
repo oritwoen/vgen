@@ -142,20 +142,16 @@ use vgen::{
 
 ```rust
 use vgen::{Pattern, ScanConfig, AddressFormat, scan};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 let pattern = Pattern::new("^1Cat", false)?;
 let config = ScanConfig {
-    pattern: Arc::new(pattern),
     format: AddressFormat::P2pkh,
-    threads: num_cpus::get(),
     count: 1,
+    ..ScanConfig::default()
 };
-let stop = Arc::new(AtomicBool::new(false));
-let result = scan(&config, stop);
+let result = scan(&pattern, &config);
 for addr in &result.matches {
-    println!("{} {}", addr.address, addr.private_key);
+    println!("{} {} {}", addr.address, addr.wif, addr.hex);
 }
 ```
 
@@ -165,8 +161,9 @@ for addr in &result.matches {
 use vgen::{AddressFormat, AddressGenerator};
 
 let gen = AddressGenerator::new(AddressFormat::P2pkh);
-let addr = gen.generate_random();
-// addr.address, addr.private_key, addr.format
+let secret = [1u8; 32]; // your 32-byte secret key
+let addr = gen.generate(&secret).expect("valid key");
+// addr.address, addr.wif, addr.hex, addr.format
 ```
 
 For full type definitions and GPU API details, see [api-reference.md](references/api-reference.md).
@@ -180,7 +177,7 @@ For full type definitions and GPU API details, see [api-reference.md](references
 ## Limitations
 
 - GPU acceleration works for P2PKH, P2WPKH, and P2TR. Other formats fall back to CPU automatically.
-- Case insensitive matching (`-i`) only works with P2PKH in `generate` mode.
+- Case-insensitive matching (`-i`) only works with P2PKH in `generate` mode.
 - Ethereum format is CPU-only in `range` mode.
 - `--prefix-length` must be at least 1 when used.
 - This is experimental software. Do not use generated keys for real funds without thorough verification.
