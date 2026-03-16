@@ -305,7 +305,8 @@ impl GpuRunner {
             immediate_size: 0,
         });
 
-        eprintln!("Creating init pipeline...");
+        eprintln!("Creating compute pipelines...");
+
         let init_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Init Pipeline"),
             layout: Some(&pipeline_layout),
@@ -315,7 +316,6 @@ impl GpuRunner {
             cache: None,
         });
 
-        eprintln!("Creating search pipeline...");
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Search Pipeline"),
             layout: Some(&pipeline_layout),
@@ -325,8 +325,6 @@ impl GpuRunner {
             cache: None,
         });
 
-        // Batch affine inversion pipelines
-        eprintln!("Creating batch affine inversion pipelines...");
         let compute_jacobian_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Compute Jacobian Pipeline"),
@@ -356,6 +354,8 @@ impl GpuRunner {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
+
+        eprintln!("Pipelines ready.");
 
         let table_size = u64::from(batch_size) * 64;
         let table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
