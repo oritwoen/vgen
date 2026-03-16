@@ -79,6 +79,9 @@ impl Pattern {
         for c in self.original.chars() {
             if escaped {
                 escaped = false;
+                if in_class && !class_chars.contains(&c) {
+                    class_chars.push(c);
+                }
                 continue;
             }
 
@@ -609,5 +612,13 @@ mod tests {
         let pat = Pattern::new("^1[.A]", false).unwrap();
         let invalid = pat.validate_charset(AddressFormat::P2pkh);
         assert!(invalid.is_empty());
+    }
+
+    #[test]
+    fn test_validate_charset_escaped_dot_in_class() {
+        // [\\.] is an escaped literal dot inside a class - same as [.]
+        let pat = Pattern::new("^1[\\.]", false).unwrap();
+        let invalid = pat.validate_charset(AddressFormat::P2pkh);
+        assert_eq!(invalid, vec!['.']);
     }
 }
